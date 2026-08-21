@@ -8,7 +8,10 @@ services:
       POSTGRES_USER: corebank
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-corebank}
     ports:
-      - "5432:5432"
+      # Published on 5433 by default so this does not collide with a PostgreSQL already
+      # installed on the host. The app container reaches the database at postgres:5432
+      # over the compose network regardless of what is published here.
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

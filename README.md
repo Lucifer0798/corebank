@@ -52,7 +52,12 @@ docker compose up --build
 ```
 
 This starts PostgreSQL and the application together, waits for the database to report ready,
-and applies the Flyway migrations on startup.
+and applies the Flyway migrations on startup. The API is on <http://localhost:8080>.
+
+The database is published on host port **5433**, not 5432, so the stack does not collide with
+a PostgreSQL already installed on the machine. Override it with `POSTGRES_HOST_PORT` if you
+prefer another port; the application container reaches the database at `postgres:5432` over
+the compose network either way.
 
 ### Running the tests
 
