@@ -1,0 +1,38 @@
+name: corebank
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: corebank
+      POSTGRES_USER: corebank
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-corebank}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # The application waits for this, so it must report readiness rather than liveness.
+      test: ["CMD-SHELL", "pg_isready -U corebank -d corebank"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      COREBANK_DB_URL: jdbc:postgresql://postgres:5432/corebank
+      COREBANK_DB_USER: corebank
+      COREBANK_DB_PASSWORD: ${POSTGRES_PASSWORD:-corebank}
+      # Both of these are development defaults. Supply real values through the environment
+      # (or a secrets manager) anywhere that is not a laptop.
+      COREBANK_JWT_SECRET: ${COREBANK_JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
+      COREBANK_ADMIN_PASSWORD: ${COREBANK_ADMIN_PASSWORD:-ChangeMe#2025!}
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres-data:

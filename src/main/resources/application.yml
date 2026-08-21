@@ -1,0 +1,87 @@
+spring:
+  application:
+    name: corebank
+  datasource:
+    url: ${COREBANK_DB_URL:jdbc:postgresql://localhost:5432/corebank}
+    username: ${COREBANK_DB_USER:corebank}
+    password: ${COREBANK_DB_PASSWORD:corebank}
+    hikari:
+      pool-name: corebank-pool
+      maximum-pool-size: 10
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+    tags-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
+corebank:
+  security:
+    jwt:
+      # Override in every real environment. Must be at least 32 bytes.
+      secret: ${COREBANK_JWT_SECRET:dev-only-secret-change-me-0123456789abcdef}
+      issuer: corebank-lite
+      access-token-ttl: PT30M
+    # Used only when the user table is empty. Set COREBANK_ADMIN_PASSWORD outside development.
+    bootstrap-admin-password: ${COREBANK_ADMIN_PASSWORD:ChangeMe#2025!}
+  ledger:
+    # Internal general-ledger account used as the contra-leg for cash in/out.
+    cash-account-number: GL0000000001
+    suspense-account-number: GL0000000002
+  account:
+    # Numeric prefix for generated customer account numbers.
+    number-prefix: "1001"
+
+logging:
+  level:
+    com.corebank: INFO
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:h2:mem:corebank;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+logging:
+  level:
+    com.corebank: DEBUG
