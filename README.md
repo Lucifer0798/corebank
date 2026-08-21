@@ -59,6 +59,10 @@ a PostgreSQL already installed on the machine. Override it with `POSTGRES_HOST_P
 prefer another port; the application container reaches the database at `postgres:5432` over
 the compose network either way.
 
+For the local environment underneath all of this — installing PostgreSQL without
+administrator rights, the Docker/WSL2 prerequisites, the port layout and troubleshooting —
+see [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
+
 ### Running the tests
 
 ```bash
