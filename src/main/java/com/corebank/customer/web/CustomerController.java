@@ -3,6 +3,7 @@ package com.corebank.customer.web;
 import com.corebank.common.web.PagedResponse;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.dto.CustomerResponse;
+import com.corebank.customer.dto.LinkIdentityRequest;
 import com.corebank.customer.dto.UpdateKycRequest;
 import com.corebank.customer.service.CustomerService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,6 +17,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -52,6 +55,14 @@ public class CustomerController {
         return customerService.get(customerId);
     }
 
+    @GetMapping("/me")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    @Operation(summary = "Fetch the customer record linked to the caller's own identity",
+            description = "404 until staff link this identity to a customer via PATCH /{customerId}/identity.")
+    public CustomerResponse me(@AuthenticationPrincipal Jwt jwt) {
+        return customerService.getBySubject(jwt.getSubject());
+    }
+
     @GetMapping
     @Operation(summary = "List customers, newest first")
     public PagedResponse<CustomerResponse> list(
@@ -67,5 +78,13 @@ public class CustomerController {
     public CustomerResponse updateKyc(@PathVariable UUID customerId,
                                       @Valid @RequestBody UpdateKycRequest request) {
         return customerService.updateKyc(customerId, request.kycStatus());
+    }
+
+    @PatchMapping("/{customerId}/identity")
+    @Operation(summary = "Link a Keycloak identity to this customer",
+            description = "Required before that identity's tokens can read the customer's own accounts.")
+    public CustomerResponse linkIdentity(@PathVariable UUID customerId,
+                                         @Valid @RequestBody LinkIdentityRequest request) {
+        return customerService.linkIdentity(customerId, request.keycloakSubject());
     }
 }

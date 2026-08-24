@@ -12,6 +12,7 @@ import com.corebank.common.Money;
 import com.corebank.common.SequenceNumberGenerator;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.common.exception.ResourceNotFoundException;
+import com.corebank.config.CacheConfig;
 import com.corebank.config.CoreBankProperties;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.service.CustomerService;
@@ -19,6 +20,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -83,6 +86,13 @@ public class AccountService {
         return AccountResponse.from(accounts.save(account));
     }
 
+    /**
+     * Account detail is read far more often than it changes, so it is cached for a short TTL.
+     * Every path that changes a balance or a status calls {@link #evictCache(UUID)} straight
+     * after, so the TTL only ever covers a gap the eviction missed -- it is a safety net, not
+     * the primary freshness mechanism.
+     */
+    @Cacheable(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
     @Transactional(readOnly = true)
     public AccountResponse get(UUID accountId) {
         return AccountResponse.from(require(accountId));
@@ -99,6 +109,7 @@ public class AccountService {
         return accounts.findByCustomerId(customerId).stream().map(AccountResponse::from).toList();
     }
 
+    @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
     @Transactional
     public AccountResponse changeStatus(UUID accountId, AccountStatus target) {
         Account account = require(accountId);
@@ -116,6 +127,12 @@ public class AccountService {
         account.setStatus(target);
         account.setClosedAt(target == AccountStatus.CLOSED ? Instant.now() : null);
         return AccountResponse.from(account);
+    }
+
+    /** Evicts the cached detail for one account. Called after any posting that touches its balance. */
+    @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
+    public void evictCache(UUID accountId) {
+        // Body intentionally empty; @CacheEvict does the work.
     }
 
     @Transactional(readOnly = true)

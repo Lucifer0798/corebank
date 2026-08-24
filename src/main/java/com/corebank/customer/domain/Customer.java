@@ -53,6 +53,14 @@ public class Customer extends AuditableEntity {
     @Column(name = "status", nullable = false, length = 20)
     private CustomerStatus status = CustomerStatus.ACTIVE;
 
+    /**
+     * The {@code sub} claim of the Keycloak-issued token that represents this customer's own
+     * login. Null until staff link the two records; a CUSTOMER-role token with no matching
+     * customer can authenticate but cannot read any account.
+     */
+    @Column(name = "keycloak_subject", length = 64)
+    private String keycloakSubject;
+
     public String fullName() {
         return firstName + " " + lastName;
     }

@@ -21,19 +21,88 @@ services:
       timeout: 3s
       retries: 10
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.2
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      # Fixed so every token's `iss` claim is this one value, regardless of whether the request
+      # that obtained it came from the host (localhost:8081) or another container (keycloak:8080).
+      # The application is configured to match on this same string -- see COREBANK_OIDC_ISSUER_URI.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./keycloak/corebank-realm.json:/opt/keycloak/data/import/corebank-realm.json:ro
+    ports:
+      - "8081:8080"
+
+  redis:
+    image: redis:8.8-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:4.3.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Not reachable from the host on purpose -- only the app and kafka-ui, both inside this
+      # compose network, ever talk to it, so there is no dual internal/external listener to keep
+      # in sync.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    environment:
+      KAFKA_CLUSTERS_0_NAME: corebank
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+
   app:
     build: .
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
     environment:
       COREBANK_DB_URL: jdbc:postgresql://postgres:5432/corebank
       COREBANK_DB_USER: corebank
       COREBANK_DB_PASSWORD: ${POSTGRES_PASSWORD:-corebank}
-      # Both of these are development defaults. Supply real values through the environment
-      # (or a secrets manager) anywhere that is not a laptop.
-      COREBANK_JWT_SECRET: ${COREBANK_JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
-      COREBANK_ADMIN_PASSWORD: ${COREBANK_ADMIN_PASSWORD:-ChangeMe#2025!}
+      # issuer-uri is a logical value only -- it is compared as a string against each token's
+      # `iss` claim and never dialed. jwk-set-uri is the one actually fetched, and must be
+      # reachable from inside this container, hence the two different hostnames.
+      COREBANK_OIDC_ISSUER_URI: http://localhost:8081/realms/corebank
+      COREBANK_OIDC_JWK_SET_URI: http://keycloak:8080/realms/corebank/protocol/openid-connect/certs
+      COREBANK_REDIS_HOST: redis
+      COREBANK_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      COREBANK_ALLOWED_ORIGINS: ${COREBANK_ALLOWED_ORIGINS:-http://localhost:5173}
     ports:
       - "8080:8080"
 

@@ -17,6 +17,7 @@ public record CustomerResponse(
         LocalDate dateOfBirth,
         KycStatus kycStatus,
         CustomerStatus status,
+        boolean identityLinked,
         Instant createdAt) {
 
     public static CustomerResponse from(Customer customer) {
@@ -30,6 +31,7 @@ public record CustomerResponse(
                 customer.getDateOfBirth(),
                 customer.getKycStatus(),
                 customer.getStatus(),
+                customer.getKeycloakSubject() != null,
                 customer.getCreatedAt());
     }
 }

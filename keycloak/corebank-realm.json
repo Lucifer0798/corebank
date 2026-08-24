@@ -1,0 +1,104 @@
+{
+  "realm": "corebank",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 1800,
+  "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "ADMIN", "description": "Full administrative access: KYC decisions, closing accounts, creating logins" },
+      { "name": "TELLER", "description": "Onboards customers, opens accounts, moves money" },
+      { "name": "CUSTOMER", "description": "Reads only the accounts linked to this identity" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "corebank-web",
+      "name": "CoreBank Lite frontend",
+      "description": "Public SPA client. Uses Authorization Code + PKCE; direct access grants are enabled only for command-line testing.",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": [
+        "http://localhost:5173/*",
+        "http://localhost:5173"
+      ],
+      "webOrigins": [
+        "http://localhost:5173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "sub-in-access-token",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "username": "admin",
+      "email": "admin@corebank.example",
+      "firstName": "CoreBank",
+      "lastName": "Administrator",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "ChangeMe#2025!", "temporary": false }
+      ],
+      "realmRoles": [ "ADMIN" ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "username": "teller1",
+      "email": "teller1@corebank.example",
+      "firstName": "Ravi",
+      "lastName": "Teller",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "Teller#2025", "temporary": false }
+      ],
+      "realmRoles": [ "TELLER" ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "username": "asha",
+      "email": "asha.menon@example.com",
+      "firstName": "Asha",
+      "lastName": "Menon",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "Customer#2025", "temporary": false }
+      ],
+      "realmRoles": [ "CUSTOMER" ],
+      "attributes": {
+        "note": ["This user's fixed id (the token's `sub` claim) is what DevDataSeeder links to the seeded demo customer's keycloak_subject column."]
+      }
+    }
+  ]
+}

@@ -61,6 +61,14 @@ public class CustomerService {
         return CustomerResponse.from(require(id));
     }
 
+    /** Resolves the customer linked to a CUSTOMER-role token's own subject, for self-service. */
+    @Transactional(readOnly = true)
+    public CustomerResponse getBySubject(String keycloakSubject) {
+        return customers.findByKeycloakSubject(keycloakSubject)
+                .map(CustomerResponse::from)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer", "linked to this identity"));
+    }
+
     @Transactional(readOnly = true)
     public Page<CustomerResponse> list(Pageable pageable) {
         return customers.findAll(pageable).map(CustomerResponse::from);
@@ -73,6 +81,23 @@ public class CustomerService {
             throw new BusinessRuleException("CUSTOMER_CLOSED", "A closed customer cannot be re-reviewed");
         }
         customer.setKycStatus(kycStatus);
+        return CustomerResponse.from(customer);
+    }
+
+    /**
+     * Links a Keycloak identity to this customer, so that identity's tokens can read the
+     * customer's own accounts. One identity may only ever be linked to one customer; the
+     * database's unique constraint is the real guard, this check exists to fail with a clear
+     * message rather than a bare constraint-violation one.
+     */
+    @Transactional
+    public CustomerResponse linkIdentity(UUID id, String keycloakSubject) {
+        Customer customer = require(id);
+        if (customers.existsByKeycloakSubject(keycloakSubject)) {
+            throw new ConflictException("IDENTITY_ALREADY_LINKED",
+                    "This Keycloak identity is already linked to another customer");
+        }
+        customer.setKeycloakSubject(keycloakSubject);
         return CustomerResponse.from(customer);
     }
 

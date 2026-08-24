@@ -4,8 +4,9 @@ A retail banking account and transaction platform, built the way a core banking 
 actually works: every rupee that moves is recorded as a balanced double-entry posting, money
 movement is safe to retry, and nothing is ever edited after it has been booked.
 
-Phase 1 is the backend: Java 21, Spring Boot, PostgreSQL, Spring Security, Docker, JUnit and
-an OpenAPI document you can drive the whole system from.
+Phase 1 shipped the backend. Phase 2 adds Keycloak as the identity provider, Redis as a caching
+layer, Kafka as an event feed of every posting, and a React frontend that drives the whole
+system through a browser instead of curl.
 
 ---
 
@@ -18,50 +19,61 @@ an OpenAPI document you can drive the whole system from.
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
 | Idempotency | Every money-moving `POST` requires an `Idempotency-Key`. Retries never post twice. |
 | Statements | Paginated account history, newest first, signed from that account's point of view. |
-| Security | Stateless JWT auth with three roles. Customers can read only their own accounts. |
+| Security | Keycloak-issued JWTs, three realm roles. Customers can read only their own accounts. |
+| Caching | Account detail reads go through Redis with a short TTL; a Redis outage just means no caching. |
+| Events | Every posted transaction is published to Kafka once its database transaction commits. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
+| Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements. |
 | Docs | Swagger UI at `/swagger-ui.html`, OpenAPI JSON at `/v3/api-docs`. |
 
 ---
 
 ## Running it
 
-### The fastest path — no database needed
-
-The `dev` profile runs against an in-memory H2 database in PostgreSQL compatibility mode and
-seeds a walkable example on startup.
-
-```bash
-./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
-```
-
-Then open <http://localhost:8080/swagger-ui.html>.
-
-Seeded logins:
-
-| Username | Password | Role | Sees |
-| --- | --- | --- | --- |
-| `admin` | `ChangeMe#2025!` | ADMIN | Everything, including KYC decisions and user creation |
-| `teller1` | `Teller#2025` | TELLER | Every customer and account; moves money |
-| `asha` | `Customer#2025` | CUSTOMER | Only their own accounts |
-
-### With PostgreSQL, via Docker
+### The full stack, via Docker
 
 ```bash
 docker compose up --build
 ```
 
-This starts PostgreSQL and the application together, waits for the database to report ready,
-and applies the Flyway migrations on startup. The API is on <http://localhost:8080>.
+Brings up PostgreSQL, Keycloak, Redis, Kafka, Kafka UI, and the application together. First
+build takes a few minutes. Once it's up:
 
-The database is published on host port **5433**, not 5432, so the stack does not collide with
-a PostgreSQL already installed on the machine. Override it with `POSTGRES_HOST_PORT` if you
-prefer another port; the application container reaches the database at `postgres:5432` over
-the compose network either way.
+| | |
+| --- | --- |
+| API | <http://localhost:8080>, Swagger UI at `/swagger-ui.html` |
+| Keycloak admin console | <http://localhost:8081> (`admin` / `admin`) |
+| Kafka UI | <http://localhost:8082> — watch `corebank.transactions.posted` fill up as you post transactions |
+| PostgreSQL | `localhost:5433` (not 5432 — see below) |
+| Redis | `localhost:6379` |
 
-For the local environment underneath all of this — installing PostgreSQL without
-administrator rights, the Docker/WSL2 prerequisites, the port layout and troubleshooting —
-see [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
+The database is published on **5433**, not 5432, so the stack does not collide with a
+PostgreSQL already installed on the host. Override it with `POSTGRES_HOST_PORT` if you prefer
+another port; the application container reaches the database at `postgres:5432` over the
+compose network either way.
+
+### The frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Opens on <http://localhost:5173>. It talks to Keycloak directly for login (never through the
+backend) and to the API at `localhost:8080`; both need to already be running. See
+[frontend/.env.example](frontend/.env.example) if either is running somewhere else.
+
+### The backend alone, against a host PostgreSQL
+
+```bash
+./mvnw spring-boot:run
+```
+
+Authenticated endpoints still need Keycloak, Redis and Kafka reachable — start just those three
+from Compose (`docker compose up -d keycloak redis kafka`) alongside a host PostgreSQL. See
+[docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for installing PostgreSQL without administrator
+rights, the full port layout, and troubleshooting.
 
 ### Running the tests
 
@@ -69,17 +81,24 @@ see [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
 ./mvnw test
 ```
 
-47 tests: unit tests for the balance and double-entry rules, and a full end-to-end journey
-through the real HTTP stack against a real database.
+52 tests: unit tests for the balance and double-entry rules, unit tests for the Keycloak role
+mapping, and a full end-to-end journey through the real HTTP stack against a real database. No
+live Keycloak, Redis or Kafka is required — each request injects a fake authenticated principal
+directly (see `CoreBankApiIntegrationTest`), and Redis/Kafka being unreachable degrades to "no
+caching" and "events not published" rather than failing anything.
 
 ---
 
 ## Trying it from the command line
 
+Since Keycloak owns login, a token comes directly from its token endpoint rather than from the
+API. The `corebank-web` client has direct-access-grants enabled for exactly this kind of
+scripting (the frontend itself uses Authorization Code + PKCE instead):
+
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"teller1","password":"Teller#2025"}' | jq -r .accessToken)
+TOKEN=$(curl -s -X POST http://localhost:8081/realms/corebank/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=corebank-web \
+  -d username=teller1 -d password='Teller#2025' | jq -r .access_token)
 ```
 
 ```bash
@@ -93,6 +112,14 @@ curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT_ID/deposits \
 Send that second request again with the same key and the same body: you get the original
 transaction back and the header `Idempotency-Replayed: true`. The balance does not move.
 Send it with the same key but a different body and you get `409 IDEMPOTENCY_KEY_REUSED`.
+
+Demo logins (see [keycloak/corebank-realm.json](keycloak/corebank-realm.json)):
+
+| Username | Password | Role |
+| --- | --- | --- |
+| `admin` | `ChangeMe#2025!` | ADMIN |
+| `teller1` | `Teller#2025` | TELLER |
+| `asha` | `Customer#2025` | CUSTOMER |
 
 ---
 
@@ -166,21 +193,56 @@ same way by a dedicated handler rather than falling back to a differently shaped
 
 ### Security
 
-Stateless JWT. Login exchanges credentials for a short-lived HS256 token carrying the user's
-roles and, for self-service logins, the customer they belong to. Passwords are BCrypt hashes.
+Keycloak is the identity provider. It issues the tokens; the application only validates them
+and maps `realm_access.roles` onto Spring Security's `ROLE_` authorities (Keycloak nests realm
+roles under that claim, so the framework's built-in flat-claim converter doesn't understand it
+— see `SecurityConfig.RealmRoleConverter`). There is no local login endpoint: a client obtains a
+token directly from Keycloak and presents it as a bearer token.
 
 | Role | May |
 | --- | --- |
 | `CUSTOMER` | Read their own accounts and statements |
 | `TELLER` | Onboard customers, open accounts, move money |
-| `ADMIN` | Everything, plus KYC decisions, closing accounts and creating logins |
+| `ADMIN` | Everything, plus KYC decisions, closing accounts and linking identities |
 
-Ownership is enforced with `@PreAuthorize` against a bean that compares the account's owner
-to the `customerId` claim, so a customer reading someone else's account gets `403`, not data.
+A CUSTOMER token's ownership is resolved by looking up `customer.keycloak_subject` against the
+token's `sub` claim — the one claim Keycloak always issues and never lets drift out of sync with
+an application-managed attribute — rather than by trusting a customer id embedded in the token
+itself. Staff link a Keycloak identity to a customer via `PATCH /customers/{id}/identity`; a
+customer resolves their own record via `GET /customers/me`.
 
-The token is validated as an OAuth2 resource server. Moving to Keycloak or Cognito in a later
-phase means replacing two beans with an issuer URI — the authorisation rules and the role
-mapping stay exactly as they are.
+The `issuer-uri` and `jwk-set-uri` resource-server properties are both set deliberately: with
+only `issuer-uri`, Spring performs an eager discovery-document fetch at application startup,
+which would fail if Keycloak isn't up yet. With both set, Spring validates the `iss` claim as a
+plain string comparison and fetches signing keys lazily — so the application starts fine even
+before Keycloak does.
+
+### Caching
+
+Redis sits in front of `GET /accounts/{id}` with a 30-second TTL. Every posting that touches an
+account evicts its cache entry immediately after commit, so the TTL is a safety net for a
+missed eviction, not the primary freshness mechanism — an eviction bug would show up as
+staleness for at most 30 seconds, not indefinitely.
+
+Redis is a read-through accelerator, never a source of truth: every cached value also lives in
+PostgreSQL. `CacheConfig` implements `CachingConfigurer` and installs an error handler that logs
+and swallows cache failures instead of the framework's default of rethrowing them — a Redis
+outage degrades to "no caching," never to a 500.
+
+### Events
+
+Every posted transaction is published to the `corebank.transactions.posted` Kafka topic once
+its database transaction actually commits — a `@TransactionalEventListener(phase = AFTER_COMMIT)`
+listener does the send, so a transaction that rolls back (an optimistic-lock failure, a
+constraint violation) never reaches Kafka at all. A demo `@KafkaListener` logs what it consumes,
+standing in for whatever a later phase turns this into: a notifications service, a fraud
+pipeline, an audit export.
+
+Publishing is fire-and-forget: the ledger is the single source of truth, this topic is a
+downstream feed of it, and a broker outage should never fail an HTTP request that already
+succeeded and committed. The producer's `max.block.ms` is set to 3 seconds in
+`KafkaProducerConfig` — Kafka's client default is 60 seconds, which would otherwise hold the
+request thread hostage on every posting during a broker outage.
 
 ---
 
@@ -188,15 +250,14 @@ mapping stay exactly as they are.
 
 | Method | Path | Role | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/api/v1/auth/login` | — | Exchange credentials for a bearer token |
-| `POST` | `/api/v1/auth/users` | ADMIN | Create a staff or self-service login |
-| `GET` | `/api/v1/auth/me` | any | Describe the caller behind the current token |
 | `POST` | `/api/v1/customers` | TELLER, ADMIN | Onboard a customer |
 | `GET` | `/api/v1/customers` | TELLER, ADMIN | List customers |
 | `GET` | `/api/v1/customers/{id}` | TELLER, ADMIN | Fetch one customer |
+| `GET` | `/api/v1/customers/me` | CUSTOMER | Resolve the caller's own customer record |
 | `PATCH` | `/api/v1/customers/{id}/kyc` | ADMIN | Record a KYC decision |
+| `PATCH` | `/api/v1/customers/{id}/identity` | TELLER, ADMIN | Link a Keycloak identity to this customer |
 | `POST` | `/api/v1/accounts` | TELLER, ADMIN | Open an account |
-| `GET` | `/api/v1/accounts/{id}` | owner, staff | Fetch one account |
+| `GET` | `/api/v1/accounts/{id}` | owner, staff | Fetch one account (cached) |
 | `GET` | `/api/v1/accounts/{id}/balance` | owner, staff | Current and available balance |
 | `GET` | `/api/v1/customers/{id}/accounts` | owner, staff | Accounts a customer holds |
 | `POST` | `/api/v1/accounts/{id}/freeze` | TELLER, ADMIN | Freeze an account |
@@ -215,13 +276,13 @@ mapping stay exactly as they are.
 | `VALIDATION_FAILED` | 400 | Request body failed validation; see `errors` |
 | `MISSING_HEADER` | 400 | A required header, usually `Idempotency-Key`, was absent |
 | `UNAUTHENTICATED` | 401 | No valid bearer token |
-| `AUTHENTICATION_FAILED` | 401 | Wrong username or password |
 | `ACCESS_DENIED` | 403 | Authenticated, but not allowed |
 | `RESOURCE_NOT_FOUND` | 404 | No such customer, account or transaction |
 | `IDEMPOTENCY_KEY_REUSED` | 409 | Same key, different body |
-| `REQUEST_IN_PROGRESS` | 409 | An identical request is still running |
+| `REQUEST_IN_PROGRESS` | 409 | An identical request is still being processed |
 | `CONCURRENT_MODIFICATION` | 409 | Optimistic lock lost; retry |
-| `USERNAME_TAKEN` / `EMAIL_TAKEN` | 409 | Already in use |
+| `EMAIL_TAKEN` | 409 | A customer with that email already exists |
+| `IDENTITY_ALREADY_LINKED` | 409 | That Keycloak identity is linked to a different customer |
 | `INSUFFICIENT_FUNDS` | 422 | Available balance, including overdraft, is too low |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
@@ -236,18 +297,22 @@ mapping stay exactly as they are.
 ## Layout
 
 ```
-src/main/java/com/corebank/
-├── auth/          Login, JWT issuing, users and roles
-├── account/       Accounts, balances, ownership checks
-├── customer/      Onboarding and KYC
-├── transaction/   Postings, the ledger, statements
-├── idempotency/   Replay protection for money movement
-├── common/        Money, audit columns, errors, sequences
-└── config/        Security, OpenAPI, properties, bootstrap data
+corebank/
+├── src/main/java/com/corebank/
+│   ├── account/       Accounts, balances, ownership checks
+│   ├── customer/      Onboarding, KYC, Keycloak identity linking
+│   ├── transaction/   Postings, the ledger, statements, Kafka publishing
+│   ├── idempotency/   Replay protection for money movement
+│   ├── common/        Money, audit columns, errors, sequences
+│   └── config/        Security, caching, Kafka, OpenAPI, properties
+├── src/main/resources/db/migration/   Flyway migrations
+├── keycloak/corebank-realm.json       Realm, roles, clients and demo users
+├── frontend/                          React + TypeScript SPA
+└── docs/LOCAL_SETUP.md                Standing up the environment on Windows
 ```
 
-Each slice keeps its own `domain`, `repository`, `service`, `web` and `dto` packages, so a
-feature is one directory rather than a trail through five technical layers.
+Each backend slice keeps its own `domain`, `repository`, `service`, `web` and `dto` packages, so
+a feature is one directory rather than a trail through five technical layers.
 
 The schema lives in `src/main/resources/db/migration` as Flyway migrations, written in
 portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate is set to
@@ -262,21 +327,27 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_DB_URL` | `jdbc:postgresql://localhost:5432/corebank` | |
 | `COREBANK_DB_USER` | `corebank` | |
 | `COREBANK_DB_PASSWORD` | `corebank` | |
-| `COREBANK_JWT_SECRET` | a development value | **Set this.** At least 32 bytes; HS256 signing key |
-| `COREBANK_ADMIN_PASSWORD` | `ChangeMe#2025!` | Only used to create the first `admin` login when the user table is empty |
+| `COREBANK_OIDC_ISSUER_URI` | `http://localhost:8081/realms/corebank` | Compared against every token's `iss` claim |
+| `COREBANK_OIDC_JWK_SET_URI` | `http://localhost:8081/realms/.../certs` | Where signing keys are actually fetched from |
+| `COREBANK_REDIS_HOST` / `_PORT` | `localhost` / `6379` | |
+| `COREBANK_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | |
+| `COREBANK_ALLOWED_ORIGINS` | `http://localhost:5173` | CORS; comma-separated for more than one |
 | `SERVER_PORT` | `8080` | |
 
 The defaults exist so the project starts on a laptop with no setup. None of them are
-appropriate anywhere else.
+appropriate anywhere else — in particular, `COREBANK_OIDC_ISSUER_URI` and `_JWK_SET_URI` need
+real values pointing at wherever Keycloak actually runs in any environment beyond a laptop.
 
 ---
 
-## Phase 1 scope, and what is deliberately not here
+## Scope, and what is deliberately not here
 
-Built: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
-OpenAPI/Swagger · Docker · JUnit · Git.
+Built across Phase 1 and Phase 2: Java 21 · Spring Boot · Spring Security · Hibernate ·
+PostgreSQL · REST · OpenAPI/Swagger · Docker · JUnit · Git · Keycloak/OIDC · Redis · Kafka ·
+React + TypeScript.
 
-Not yet, and left for later phases by design: Redis, Kafka, gRPC, Keycloak/OIDC, Kubernetes,
-Terraform, AWS, OpenTelemetry/Prometheus/Grafana, Testcontainers, k6, and the frontend. The
-seams they will attach to already exist — resource-server security for OIDC, an append-only
-ledger for event publishing, and a stateless application for horizontal scaling.
+Not yet, left for later phases by design: gRPC, Kubernetes, Terraform, AWS,
+OpenTelemetry/Prometheus/Grafana/OpenSearch, Testcontainers, REST Assured, k6, SonarQube/Trivy/
+CodeQL, and a Python/FastAPI/MLflow data-AI tier. The seams they will attach to already exist —
+a stateless application for horizontal scaling and Kubernetes, an append-only ledger already
+feeding Kafka for whatever downstream analytics or ML pipeline comes next.

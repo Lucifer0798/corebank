@@ -9,24 +9,37 @@ production. You do not need all of them.
 
 | | Needs | Database | Use it for |
 | --- | --- | --- | --- |
-| `dev` profile | nothing | H2, in memory | Clicking through Swagger in 30 seconds |
-| Default profile | PostgreSQL on the host | PostgreSQL 17 on `5432` | Day-to-day development |
-| Docker Compose | Docker Desktop | PostgreSQL 17 in a container | Checking the deployable artefact |
+| `dev` profile | nothing for the DB; Keycloak still needed for auth | H2, in memory | Browsing the schema via Swagger/H2 console |
+| Default profile | PostgreSQL on the host, Keycloak/Redis/Kafka reachable | PostgreSQL 17 on `5432` | Day-to-day development |
+| Docker Compose | Docker Desktop | PostgreSQL 17 in a container | Checking the deployable artefact, the frontend, everything together |
+
+Since Phase 2, Keycloak issues every token and there is no local login endpoint, so
+**authenticated requests need Keycloak reachable no matter which of these you pick** for the
+database. The cheapest way to get that without the whole stack:
+
+```bash
+docker compose up -d keycloak redis kafka
+```
+
+then run the application however you like from the table above.
 
 ---
 
-## 1. The fastest path — no database at all
+## 1. The fastest path for the database — H2
 
 ```bash
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 H2 runs in memory in PostgreSQL compatibility mode, Flyway applies the same migrations, and a
-seeded customer with two funded accounts is created on startup. Swagger UI is at
-<http://localhost:8080/swagger-ui.html>. Everything vanishes when you stop the process.
+seeded customer with two funded accounts is created on startup. Everything vanishes when you
+stop the process.
 
 This is also what `./mvnw test` uses, so the H2 path stays honest — the migrations are written
-in portable SQL precisely so the same files run on both engines.
+in portable SQL precisely so the same files run on both engines. The seeded customer is linked
+to the fixed Keycloak subject the realm import gives the demo user "asha", so logging in as her
+shows exactly this data — but that login still needs Keycloak running (`docker compose up -d
+keycloak`); this profile only replaces the database, not authentication.
 
 ---
 
@@ -155,6 +168,10 @@ cluster. They are entirely separate databases with separate data.
 | 5432 | PostgreSQL on the host |
 | 5433 | PostgreSQL inside the compose stack |
 | 8080 | The application — whichever way you started it |
+| 8081 | Keycloak |
+| 8082 | Kafka UI |
+| 6379 | Redis |
+| 5173 | The frontend dev server |
 
 Override the database port with `POSTGRES_HOST_PORT` if 5433 is taken. The application
 container always reaches the database at `postgres:5432` over the compose network, so the
@@ -165,16 +182,66 @@ Only one thing can own 8080 at a time, so stop the local `spring-boot:run` befor
 
 ---
 
-## Logins
+## 4. Keycloak, Redis, Kafka
 
-The application creates an `admin` login the first time it finds an empty user table, using
-`COREBANK_ADMIN_PASSWORD` (default `ChangeMe#2025!`). Every other login is created through
-`POST /api/v1/auth/users` as that administrator.
+All three come from `docker compose up`; there is no host-native install for any of them on
+this machine. Bring up just what you need alongside a host-mode backend:
 
-Under the `dev` profile you also get `teller1` / `Teller#2025` and `asha` / `Customer#2025`.
+```bash
+docker compose up -d keycloak redis kafka
+```
+
+| | Port | Notes |
+| --- | --- | --- |
+| Keycloak | `8081` | Admin console at `/`, `admin` / `admin`. Realm, roles, clients and demo users come from [keycloak/corebank-realm.json](../keycloak/corebank-realm.json), imported at container start. |
+| Redis | `6379` | `docker exec corebank-redis-1 redis-cli KEYS "accounts*"` to see what's cached. |
+| Kafka | not published to the host | Only the app and Kafka UI (inside the compose network) ever talk to it. Watch it via Kafka UI instead. |
+| Kafka UI | `8082` | Browse the `corebank.transactions.posted` topic as postings happen. |
+
+**Keycloak does not persist anything.** `start-dev` with no volume mounted means its database
+lives in the container's own writable layer, gone on removal. That is deliberate — it keeps the
+realm import (and any edits made through this file) the actual source of truth rather than
+diverging admin-console state, but it also means:
+
+- `docker compose restart keycloak` reuses the same container filesystem, so it **does not**
+  re-run `--import-realm` if the realm already exists — a change to `corebank-realm.json` will
+  look like it did nothing.
+- To pick up a realm change, force a real recreate:
+  ```bash
+  docker compose up -d --force-recreate keycloak
+  ```
+  This cost real time once: after editing the realm file, `restart` kept silently serving the
+  stale import while every fix looked like it had failed.
+
+### Logins
+
+Keycloak owns every login now; there is no local login endpoint. Demo users, from the realm
+import:
+
+| Username | Password | Role |
+| --- | --- | --- |
+| `admin` | `ChangeMe#2025!` | ADMIN |
+| `teller1` | `Teller#2025` | TELLER |
+| `asha` | `Customer#2025` | CUSTOMER |
 
 These are development defaults and are fine on a laptop. They are not fine anywhere else — see
 the configuration table in the [README](../README.md#configuration) for the variables to set.
+
+---
+
+## 5. The frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Node 22 / npm 11 on this machine, nothing further to install. Opens on
+<http://localhost:5173>, which is already the origin `corebank-realm.json`'s client redirects to
+and the CORS origin the backend allows by default. It needs Keycloak and the API already
+running — neither is optional, since login goes straight to Keycloak and every other call goes
+straight to the API.
 
 ---
 
@@ -204,6 +271,25 @@ For a development database the fix is to throw it away — `docker compose down 
 migrations have drifted apart. This is deliberate: `ddl-auto: validate` means Hibernate never
 silently reshapes the database, so the fix is a new migration, never a change to the entity
 alone.
+
+**A Keycloak-issued token is missing the `sub` claim, and `/customers/me` 500s instead of
+404ing.** `sub` in the *access* token (not the ID token, which always has it) turned out to
+depend on the client's granted scopes in a way that was not obvious: even with `openid` and
+`basic` requested, it stayed absent until the client carried an explicit `oidc-sub-mapper`
+protocol mapper — see the `protocolMappers` block on `corebank-web` in the realm file. If a
+custom client is added without copying that mapper, expect the same symptom.
+
+**Editing `corebank-realm.json` seems to do nothing.** You almost certainly restarted Keycloak
+instead of recreating it — see the note in [section 4](#4-keycloak-redis-kafka) above.
+
+**A cached `GET /accounts/{id}` throws `ClassCastException: LinkedHashMap cannot be cast to
+AccountResponse`.** This one only shows up when two different callers hit the same cache key
+(the first request that populates the entry always "succeeds" since it deserializes what it
+just wrote in the same JVM run). The fix already in `CacheConfig` is to serialize with
+`JacksonJsonRedisSerializer<AccountResponse>`, bound to the one type this cache actually holds,
+rather than the generic polymorphic serializer — that one needs `@class` type metadata written
+into every entry to know what to deserialize back into, which reusing the application's plain
+`ObjectMapper` does not produce. Worth remembering before adding a second cached type.
 
 ---
 

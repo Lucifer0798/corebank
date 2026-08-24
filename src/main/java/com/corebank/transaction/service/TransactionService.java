@@ -13,6 +13,7 @@ import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.dto.StatementLineResponse;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.dto.TransferRequest;
+import com.corebank.transaction.messaging.TransactionPostedEvent;
 import com.corebank.transaction.repository.BankTransactionRepository;
 import com.corebank.transaction.repository.LedgerEntryRepository;
 import java.math.BigDecimal;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -40,15 +42,18 @@ public class TransactionService {
     private final LedgerEntryRepository entries;
     private final AccountService accountService;
     private final ReferenceGenerator referenceGenerator;
+    private final ApplicationEventPublisher eventPublisher;
 
     public TransactionService(BankTransactionRepository transactions,
                               LedgerEntryRepository entries,
                               AccountService accountService,
-                              ReferenceGenerator referenceGenerator) {
+                              ReferenceGenerator referenceGenerator,
+                              ApplicationEventPublisher eventPublisher) {
         this.transactions = transactions;
         this.entries = entries;
         this.accountService = accountService;
         this.referenceGenerator = referenceGenerator;
+        this.eventPublisher = eventPublisher;
     }
 
     /** Cash in at the counter: the bank holds more cash, and owes the customer more. */
@@ -142,7 +147,17 @@ public class TransactionService {
 
     private TransactionResponse post(BankTransaction transaction) {
         transaction.assertBalanced();
-        return TransactionResponse.from(transactions.save(transaction));
+        BankTransaction saved = transactions.save(transaction);
+        // The cached account detail (AccountService.get) is now stale for every account this
+        // posting touched; the short TTL is a safety net, not the primary freshness mechanism.
+        saved.getEntries().stream()
+                .map(entry -> entry.getAccount().getId())
+                .distinct()
+                .forEach(accountService::evictCache);
+        // Published now, but only actually sent to Kafka after this method's transaction
+        // commits -- see TransactionEventPublisher.
+        eventPublisher.publishEvent(TransactionPostedEvent.from(saved));
+        return TransactionResponse.from(saved);
     }
 
     private BankTransaction newTransaction(TransactionType type, BigDecimal amount, String currency,

@@ -20,6 +20,7 @@ import com.corebank.transaction.domain.TransactionType;
 import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.dto.TransferRequest;
+import com.corebank.transaction.messaging.TransactionPostedEvent;
 import com.corebank.transaction.repository.BankTransactionRepository;
 import com.corebank.transaction.repository.LedgerEntryRepository;
 import java.math.BigDecimal;
@@ -34,6 +35,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * Exercises the posting rules with the repositories mocked out, so the assertions are about
@@ -57,6 +59,9 @@ class TransactionServiceTest {
 
     @Mock
     private ReferenceGenerator referenceGenerator;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private TransactionService transactionService;
@@ -110,6 +115,7 @@ class TransactionServiceTest {
         assertThat(response.legs().get(1).direction()).isEqualTo(EntryDirection.CREDIT);
         assertThat(response.legs().get(1).balanceAfter()).isEqualByComparingTo("1250.00");
         assertThat(cash.getBalance()).isEqualByComparingTo("50250.00");
+        verify(eventPublisher).publishEvent(org.mockito.ArgumentMatchers.any(TransactionPostedEvent.class));
     }
 
     @Test

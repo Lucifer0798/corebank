@@ -1,34 +1,31 @@
 package com.corebank.config;
 
-import com.corebank.auth.service.AppUserDetailsService;
-import java.nio.charset.StandardCharsets;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
-import com.nimbusds.jose.jwk.source.ImmutableSecret;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.ProviderManager;
-import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
-import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
-import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 /**
- * Stateless JWT security. Tokens are signed with a symmetric key in Phase 1; swapping to
- * Keycloak later means replacing the two Nimbus beans below with an issuer URI -- the
- * authorisation rules and the {@code roles} claim mapping stay as they are.
+ * Stateless resource-server security. Keycloak is the identity provider: it issues the tokens,
+ * this application only validates them and maps Keycloak's {@code realm_access.roles} claim
+ * onto Spring Security's {@code ROLE_} authorities. There is no local login endpoint any more --
+ * a client obtains a token directly from Keycloak (see {@code keycloak/corebank-realm.json} for
+ * the client and demo users) and presents it as a bearer token.
  */
 @Configuration
 @EnableMethodSecurity
@@ -42,14 +39,15 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain apiFilterChain(HttpSecurity http,
-                                              ProblemAuthenticationHandler problemHandler) throws Exception {
+                                              ProblemAuthenticationHandler problemHandler,
+                                              CorsConfigurationSource corsConfigurationSource) throws Exception {
         return http
                 // No cookies or server-side session are involved, so there is no CSRF surface.
                 .csrf(csrf -> csrf.disable())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_PATHS).permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
@@ -62,43 +60,46 @@ public class SecurityConfig {
     }
 
     @Bean
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
+    public CorsConfigurationSource corsConfigurationSource(CoreBankProperties properties) {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(properties.web().allowedOrigins());
+        configuration.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key"));
+        configuration.setExposedHeaders(List.of("Location", "Idempotency-Replayed"));
+        configuration.setAllowCredentials(false);
+        configuration.setMaxAge(Duration.ofHours(1));
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/**", configuration);
+        return source;
     }
 
-    @Bean
-    public AuthenticationManager authenticationManager(AppUserDetailsService userDetailsService,
-                                                       PasswordEncoder passwordEncoder) {
-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
-        provider.setPasswordEncoder(passwordEncoder);
-        return new ProviderManager(provider);
-    }
-
-    @Bean
-    public JwtEncoder jwtEncoder(CoreBankProperties properties) {
-        return new NimbusJwtEncoder(new ImmutableSecret<>(secretKey(properties)));
-    }
-
-    @Bean
-    public JwtDecoder jwtDecoder(CoreBankProperties properties) {
-        return NimbusJwtDecoder.withSecretKey(secretKey(properties))
-                .macAlgorithm(MacAlgorithm.HS256)
-                .build();
-    }
-
-    private SecretKey secretKey(CoreBankProperties properties) {
-        byte[] keyBytes = properties.security().jwt().secret().getBytes(StandardCharsets.UTF_8);
-        return new SecretKeySpec(keyBytes, "HmacSHA256");
-    }
-
-    /** Maps the {@code roles} claim onto Spring Security's {@code ROLE_} authorities. */
+    /**
+     * Keycloak nests realm roles under {@code realm_access.roles} rather than as a top-level
+     * claim, so this reads that structure directly instead of using
+     * {@link org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter},
+     * which only understands flat claims.
+     */
     private JwtAuthenticationConverter jwtAuthenticationConverter() {
-        JwtGrantedAuthoritiesConverter authorities = new JwtGrantedAuthoritiesConverter();
-        authorities.setAuthoritiesClaimName("roles");
-        authorities.setAuthorityPrefix("ROLE_");
-
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(authorities);
+        converter.setJwtGrantedAuthoritiesConverter(new RealmRoleConverter());
         return converter;
+    }
+
+    static final class RealmRoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public Collection<GrantedAuthority> convert(Jwt jwt) {
+            Map<String, Object> realmAccess = jwt.getClaimAsMap("realm_access");
+            if (realmAccess == null || !(realmAccess.get("roles") instanceof List<?> roles)) {
+                return List.of();
+            }
+            Collection<GrantedAuthority> authorities = new ArrayList<>(roles.size());
+            for (Object role : roles) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+            }
+            return authorities;
+        }
     }
 }

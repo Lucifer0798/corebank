@@ -22,6 +22,37 @@ spring:
   threads:
     virtual:
       enabled: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Both are set deliberately. jwk-set-uri lets the app start without Keycloak being
+          # reachable yet -- only issuer-uri alone forces an eager discovery-document fetch at
+          # startup. With both present, Spring validates the `iss` claim against issuer-uri as a
+          # plain string comparison and fetches signing keys lazily from jwk-set-uri.
+          issuer-uri: ${COREBANK_OIDC_ISSUER_URI:http://localhost:8081/realms/corebank}
+          jwk-set-uri: ${COREBANK_OIDC_JWK_SET_URI:http://localhost:8081/realms/corebank/protocol/openid-connect/certs}
+  data:
+    redis:
+      host: ${COREBANK_REDIS_HOST:localhost}
+      port: ${COREBANK_REDIS_PORT:6379}
+      connect-timeout: 2s
+      timeout: 1s
+  kafka:
+    bootstrap-servers: ${COREBANK_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      # max.block.ms is set in KafkaProducerConfig instead of here: the equivalent YAML property
+      # did not reliably take effect.
+    consumer:
+      group-id: corebank-app
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+      properties:
+        spring.json.value.default.type: com.corebank.transaction.messaging.TransactionPostedEvent
+        spring.json.trusted.packages: com.corebank.transaction.messaging
 
 server:
   port: ${SERVER_PORT:8080}
@@ -44,18 +75,13 @@ springdoc:
     path: /swagger-ui.html
     operations-sorter: alpha
     tags-sorter: alpha
+    oauth:
+      client-id: corebank-web
+      use-pkce-with-authorization-code-grant: true
   api-docs:
     path: /v3/api-docs
 
 corebank:
-  security:
-    jwt:
-      # Override in every real environment. Must be at least 32 bytes.
-      secret: ${COREBANK_JWT_SECRET:dev-only-secret-change-me-0123456789abcdef}
-      issuer: corebank-lite
-      access-token-ttl: PT30M
-    # Used only when the user table is empty. Set COREBANK_ADMIN_PASSWORD outside development.
-    bootstrap-admin-password: ${COREBANK_ADMIN_PASSWORD:ChangeMe#2025!}
   ledger:
     # Internal general-ledger account used as the contra-leg for cash in/out.
     cash-account-number: GL0000000001
@@ -63,6 +89,9 @@ corebank:
   account:
     # Numeric prefix for generated customer account numbers.
     number-prefix: "1001"
+  web:
+    # Comma-separated list of origins the frontend is served from, for CORS.
+    allowed-origins: ${COREBANK_ALLOWED_ORIGINS:http://localhost:5173}
 
 logging:
   level:
