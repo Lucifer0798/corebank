@@ -1,0 +1,25 @@
+# Optional. SonarQube is heavy (a bundled Elasticsearch, a couple of GB, a slow first start)
+# and CI-oriented projects more often use SonarCloud instead of self-hosting -- but that needs
+# an account this assistant cannot create on your behalf. This overlay is the self-contained,
+# zero-signup alternative for exploring the same analysis locally.
+#
+#   docker compose -f compose.yaml -f compose.sonar.yml up -d sonarqube
+#   ./mvnw verify sonar:sonar -Dsonar.host.url=http://localhost:9000 -Dsonar.token=<token from the UI>
+#
+# The embedded database SonarQube falls back to without SONAR_JDBC_URL configured is explicitly
+# unsuited to production, which is fine here: this is local, disposable analysis, not a shared
+# quality gate server.
+services:
+  sonarqube:
+    image: sonarqube:26.8.0.126808-community
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube-data:/opt/sonarqube/data
+      - sonarqube-extensions:/opt/sonarqube/extensions
+
+volumes:
+  sonarqube-data:
+  sonarqube-extensions:

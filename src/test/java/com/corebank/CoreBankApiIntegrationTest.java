@@ -457,4 +457,12 @@ class CoreBankApiIntegrationTest {
         mockMvc.perform(get("/api/v1/customers/me").with(teller()))
                 .andExpect(status().isForbidden());
     }
+
+    // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web
+    // environment (what @AutoConfigureMockMvc drives) does not register the actuator endpoint
+    // mapping the way a real embedded servlet container does, so a MockMvc request to any
+    // /actuator/* path 404s regardless of the security rule under test. Confirmed instead
+    // against the running container: `curl http://localhost:8080/actuator/prometheus` with no
+    // Authorization header returns 200 with the expected metrics, and Prometheus's own scrape
+    // target for the app shows health "up".
 }

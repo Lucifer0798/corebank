@@ -171,6 +171,10 @@ cluster. They are entirely separate databases with separate data.
 | 8081 | Keycloak |
 | 8082 | Kafka UI |
 | 6379 | Redis |
+| 3000 | Grafana |
+| 9090 | Prometheus |
+| 3200 / 4318 | Tempo (API / OTLP receiver) |
+| 9000 | SonarQube (optional overlay, not part of the default stack) |
 | 5173 | The frontend dev server |
 
 Override the database port with `POSTGRES_HOST_PORT` if 5433 is taken. The application
@@ -242,6 +246,71 @@ Node 22 / npm 11 on this machine, nothing further to install. Opens on
 and the CORS origin the backend allows by default. It needs Keycloak and the API already
 running — neither is optional, since login goes straight to Keycloak and every other call goes
 straight to the API.
+
+---
+
+## 6. Observability -- Prometheus, Tempo, Grafana
+
+All three come from `docker compose up`; there is no host-native install. Config lives in
+[observability/](../observability/) -- Prometheus's scrape target, Tempo's receiver config, and
+Grafana's provisioned datasources and dashboard.
+
+| | Port | Notes |
+| --- | --- | --- |
+| Grafana | `3000` | No login (anonymous access, admin role, for local convenience only). **CoreBank Overview** dashboard is provisioned automatically. |
+| Prometheus | `9090` | Scrapes `app:8080/actuator/prometheus` every 5s. |
+| Tempo | `3200` (API), `4318` (OTLP/HTTP receiver) | Grafana queries it over the compose network; both ports are also published to the host for poking at directly. |
+
+Traces show up under Grafana's Explore view with the Tempo datasource selected, or via
+`curl "http://localhost:3200/api/search?limit=10"` directly.
+
+**Config file changes here need a real recreate, not a restart** -- same lesson as Keycloak's
+realm import in section 4: `docker compose up -d tempo` reuses the running container and never
+re-reads a changed `tempo.yaml`. Use `docker compose up -d --force-recreate tempo`.
+
+**Tempo's config schema changed in 3.x.** The classic single-binary `ingester:`/`compactor:`
+blocks from most getting-started guides fail to parse against Tempo 3.0.3 with `field ingester
+not found in type app.Config`. The working minimal config only needs `server`,
+`distributor.receivers.otlp` and `storage.trace` -- see [observability/tempo.yaml](../observability/tempo.yaml).
+Also set the OTLP receiver's `endpoint` explicitly to `0.0.0.0:4318`/`0.0.0.0:4317`: left
+blank, Tempo binds `127.0.0.1` only, which is unreachable from any other container including
+the app.
+
+**A second, unconfigured OTLP metrics exporter fires every minute regardless of Prometheus
+scraping.** `spring-boot-starter-opentelemetry` auto-enables push-based OTLP metrics export in
+addition to whatever else is configured; without `management.otlp.metrics.export.enabled:
+false`, it logs a connection failure to `localhost:4318` every minute since nothing is listening
+there for metrics (only Tempo's tracing receiver is). Harmless but noisy -- already disabled in
+`application.yml` since this project uses Prometheus scraping for metrics instead.
+
+---
+
+## 7. Static analysis -- SonarQube (optional, local only)
+
+```bash
+docker compose -f compose.yaml -f compose.sonar.yml up -d sonarqube
+```
+
+Heavy (bundled Elasticsearch, a couple of GB, a slow first start -- give it a minute or two).
+Once `curl http://localhost:9000/api/system/status` reports `"status":"UP"`:
+
+1. Open <http://localhost:9000>, log in as `admin` / `admin`.
+2. Generate a token: My Account → Security, or `curl -u admin:admin -X POST
+   "http://localhost:9000/api/user_tokens/generate" -d "name=corebank-local"`.
+3. Run the analysis:
+   ```bash
+   ./mvnw verify sonar:sonar -Dsonar.host.url=http://localhost:9000 -Dsonar.token=<token>
+   ```
+
+Coverage comes from the JaCoCo XML report the `test` phase already produces at
+`target/site/jacoco/jacoco.xml` (configured via `sonar.coverage.jacoco.xmlReportPaths` in
+`pom.xml`), so `verify` (which runs `test`) has to run before `sonar:sonar`, not the other way
+round.
+
+`docker compose -f compose.yaml -f compose.sonar.yml stop sonarqube` when done -- it is not part
+of the default stack and has no reason to stay running between sessions. Its data persists in
+named volumes (`sonarqube-data`, `sonarqube-extensions`) across stop/start, just not across
+`down -v`.
 
 ---
 

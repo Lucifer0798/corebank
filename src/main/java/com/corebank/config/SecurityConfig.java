@@ -34,7 +34,10 @@ public class SecurityConfig {
     private static final String[] PUBLIC_PATHS = {
             "/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs.yaml",
             "/swagger-ui/**", "/swagger-ui.html",
-            "/actuator/health", "/actuator/health/**", "/actuator/info"
+            // Operational endpoints scraped by infrastructure (Prometheus, container
+            // orchestrators) that has no Keycloak token to present. None of these expose
+            // customer or account data -- see GlobalExceptionHandler for that boundary instead.
+            "/actuator/health", "/actuator/health/**", "/actuator/info", "/actuator/prometheus"
     };
 
     @Bean

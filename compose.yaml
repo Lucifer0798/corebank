@@ -80,6 +80,39 @@ services:
     ports:
       - "8082:8080"
 
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  tempo:
+    image: grafana/tempo:3.0.3
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      # Only for poking at the API directly from the host; Grafana and the containerized app
+      # both reach Tempo over the compose network regardless of what's published here.
+      - "3200:3200"
+      - "4318:4318"
+
+  grafana:
+    image: grafana/grafana:13.2.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - tempo
+    ports:
+      - "3000:3000"
+
   app:
     build: .
     depends_on:
@@ -90,6 +123,8 @@ services:
       kafka:
         condition: service_healthy
       keycloak:
+        condition: service_started
+      tempo:
         condition: service_started
     environment:
       COREBANK_DB_URL: jdbc:postgresql://postgres:5432/corebank
@@ -103,6 +138,7 @@ services:
       COREBANK_REDIS_HOST: redis
       COREBANK_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       COREBANK_ALLOWED_ORIGINS: ${COREBANK_ALLOWED_ORIGINS:-http://localhost:5173}
+      COREBANK_OTLP_TRACING_ENDPOINT: http://tempo:4318/v1/traces
     ports:
       - "8080:8080"
 

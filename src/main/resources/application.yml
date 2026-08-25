@@ -64,11 +64,36 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       probes:
         enabled: true
+  otlp:
+    tracing:
+      endpoint: ${COREBANK_OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+    metrics:
+      export:
+        # Metrics are pulled by Prometheus scraping /actuator/prometheus instead; without this,
+        # the opentelemetry starter also auto-enables a *second*, unconfigured push-based OTLP
+        # metrics exporter that just fails against localhost every minute.
+        enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # Same value as management.otlp.tracing.endpoint above, under the other property
+          # namespace spring-boot-opentelemetry also recognizes -- set both until it's clear
+          # which one this Boot version actually binds the exporter to.
+          endpoint: ${COREBANK_OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+  tracing:
+    sampling:
+      # Every request traced. Fine at this traffic volume; a real production
+      # deployment would sample a fraction instead.
+      probability: 1.0
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 springdoc:
   swagger-ui:

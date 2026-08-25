@@ -1,6 +1,7 @@
 package com.corebank.common;
 
 import java.sql.SQLException;
+import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
@@ -16,6 +17,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class SequenceNumberGenerator {
 
+    /** Every caller today passes a hardcoded constant; this is a defensive floor underneath
+     * that, not a real input boundary -- a plain identifier is all a sequence name can validly
+     * be, so anything else means the string interpolation below was handed something it never
+     * should have been. */
+    private static final Pattern VALID_SEQUENCE_NAME = Pattern.compile("^[a-z_][a-z0-9_]*$");
+
     private final JdbcClient jdbcClient;
     private final String nextValueSql;
 
@@ -25,9 +32,19 @@ public class SequenceNumberGenerator {
     }
 
     public long next(String sequenceName) {
-        return jdbcClient.sql(nextValueSql.formatted(sequenceName))
+        if (!VALID_SEQUENCE_NAME.matcher(sequenceName).matches()) {
+            throw new IllegalArgumentException("Not a valid sequence name: '" + sequenceName + "'");
+        }
+        Long value = jdbcClient.sql(nextValueSql.formatted(sequenceName))
                 .query(Long.class)
                 .single();
+        if (value == null) {
+            // Never happens in practice -- nextval()/next value for never yields SQL NULL --
+            // but .single() is typed to allow it, so unboxing it blindly would trade a clear
+            // failure here for a bare NullPointerException at the call site.
+            throw new IllegalStateException("Sequence '" + sequenceName + "' produced no value");
+        }
+        return value;
     }
 
     private static String resolveDialect(DataSource dataSource) {

@@ -1,6 +1,7 @@
 package com.corebank.idempotency;
 
 import com.corebank.common.exception.ConflictException;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -33,14 +34,17 @@ public class IdempotencyService {
     private final IdempotencyRecordRepository records;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate requiresNew;
+    private final MeterRegistry meterRegistry;
 
     public IdempotencyService(IdempotencyRecordRepository records,
                               ObjectMapper objectMapper,
-                              PlatformTransactionManager transactionManager) {
+                              PlatformTransactionManager transactionManager,
+                              MeterRegistry meterRegistry) {
         this.records = records;
         this.objectMapper = objectMapper;
         this.requiresNew = new TransactionTemplate(transactionManager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.meterRegistry = meterRegistry;
     }
 
     public <T> Result<T> execute(String scope, String key, Object request, Class<T> responseType,
@@ -104,6 +108,7 @@ public class IdempotencyService {
         }
 
         log.debug("Replaying idempotent response for {}/{}", scope, key);
+        meterRegistry.counter("corebank.idempotency.replayed", "scope", scope).increment();
         return new Result<>(objectMapper.readValue(existing.getResponseBody(), responseType), true);
     }
 

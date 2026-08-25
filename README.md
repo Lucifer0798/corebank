@@ -1,12 +1,17 @@
 # CoreBank Lite
 
+[![CI](https://github.com/Lucifer0798/corebank/actions/workflows/ci.yml/badge.svg)](https://github.com/Lucifer0798/corebank/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Lucifer0798/corebank/actions/workflows/codeql.yml/badge.svg)](https://github.com/Lucifer0798/corebank/actions/workflows/codeql.yml)
+
 A retail banking account and transaction platform, built the way a core banking backend
 actually works: every rupee that moves is recorded as a balanced double-entry posting, money
 movement is safe to retry, and nothing is ever edited after it has been booked.
 
-Phase 1 shipped the backend. Phase 2 adds Keycloak as the identity provider, Redis as a caching
+Phase 1 shipped the backend. Phase 2 added Keycloak as the identity provider, Redis as a caching
 layer, Kafka as an event feed of every posting, and a React frontend that drives the whole
-system through a browser instead of curl.
+system through a browser instead of curl. Phase 3 adds metrics and distributed tracing
+(OpenTelemetry, Prometheus, Grafana), a CI pipeline (GitHub Actions, CodeQL), and static/image
+security scanning (SonarQube, Trivy).
 
 ---
 
@@ -24,6 +29,8 @@ system through a browser instead of curl.
 | Events | Every posted transaction is published to Kafka once its database transaction commits. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
 | Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements. |
+| Observability | Every request traced end to end (OpenTelemetry/Tempo); business and platform metrics in Grafana. |
+| CI | Every push builds and tests the backend and frontend, scans the Docker image with Trivy, and runs CodeQL. |
 | Docs | Swagger UI at `/swagger-ui.html`, OpenAPI JSON at `/v3/api-docs`. |
 
 ---
@@ -36,14 +43,16 @@ system through a browser instead of curl.
 docker compose up --build
 ```
 
-Brings up PostgreSQL, Keycloak, Redis, Kafka, Kafka UI, and the application together. First
-build takes a few minutes. Once it's up:
+Brings up PostgreSQL, Keycloak, Redis, Kafka, Kafka UI, Prometheus, Tempo, Grafana, and the
+application together. First build takes a few minutes. Once it's up:
 
 | | |
 | --- | --- |
 | API | <http://localhost:8080>, Swagger UI at `/swagger-ui.html` |
 | Keycloak admin console | <http://localhost:8081> (`admin` / `admin`) |
 | Kafka UI | <http://localhost:8082> — watch `corebank.transactions.posted` fill up as you post transactions |
+| Grafana | <http://localhost:3000> (no login needed) — the **CoreBank Overview** dashboard, and every request's trace under Explore → Tempo |
+| Prometheus | <http://localhost:9090> |
 | PostgreSQL | `localhost:5433` (not 5432 — see below) |
 | Redis | `localhost:6379` |
 
@@ -81,11 +90,25 @@ rights, the full port layout, and troubleshooting.
 ./mvnw test
 ```
 
-52 tests: unit tests for the balance and double-entry rules, unit tests for the Keycloak role
-mapping, and a full end-to-end journey through the real HTTP stack against a real database. No
-live Keycloak, Redis or Kafka is required — each request injects a fake authenticated principal
-directly (see `CoreBankApiIntegrationTest`), and Redis/Kafka being unreachable degrades to "no
-caching" and "events not published" rather than failing anything.
+55 tests: unit tests for the balance and double-entry rules, unit tests for the Keycloak role
+mapping, unit tests for a defensive validation in the sequence-number generator, and a full
+end-to-end journey through the real HTTP stack against a real database. No live Keycloak, Redis
+or Kafka is required — each request injects a fake authenticated principal directly (see
+`CoreBankApiIntegrationTest`), and Redis/Kafka being unreachable degrades to "no caching" and
+"events not published" rather than failing anything.
+
+### Static analysis, locally
+
+```bash
+docker compose -f compose.yaml -f compose.sonar.yml up -d sonarqube
+./mvnw verify sonar:sonar -Dsonar.host.url=http://localhost:9000 -Dsonar.token=<token from the SonarQube UI>
+```
+
+Self-hosted SonarQube Community Edition, entirely local — no account needed. It's a separate,
+optional overlay rather than part of the default stack: heavy (a bundled Elasticsearch, a
+couple of GB, a slow first start) and most projects would use SonarCloud in CI instead, which
+this repo's CI workflow supports too if you add a `SONAR_TOKEN` secret pointing at your own
+SonarCloud account. See [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for first-login details.
 
 ---
 
@@ -244,6 +267,40 @@ succeeded and committed. The producer's `max.block.ms` is set to 3 seconds in
 `KafkaProducerConfig` — Kafka's client default is 60 seconds, which would otherwise hold the
 request thread hostage on every posting during a broker outage.
 
+### Observability
+
+Every request is traced end to end with OpenTelemetry (via Micrometer Tracing's OTel bridge,
+Spring Boot's native integration rather than a javaagent) and exported over OTLP to Tempo, which
+Grafana queries directly — open a trace from Grafana's Explore view and it shows the full path
+through Spring MVC, the ledger write, and the Kafka publish, one span per hop.
+
+Metrics are pulled, not pushed: Prometheus scrapes `/actuator/prometheus` every 5 seconds. Two
+custom counters sit alongside the usual JVM/HTTP/HikariCP metrics —
+`corebank.transactions.posted` (by type and currency) and `corebank.idempotency.replayed` (by
+scope) — because "how many deposits happened" and "how often are clients retrying" are the two
+numbers a banking platform's own dashboard should answer first, not just infrastructure health.
+The **CoreBank Overview** Grafana dashboard is provisioned automatically; no manual setup.
+
+`/actuator/prometheus` is deliberately public (no bearer token) alongside `/actuator/health`
+and `/actuator/info` — Prometheus has no Keycloak token to present, and none of the three expose
+customer or account data.
+
+### CI and security scanning
+
+Every push and pull request against `main` runs three GitHub Actions workflows: backend build
+and test (with JaCoCo coverage), frontend build and typecheck, and a Docker image build scanned
+with Trivy. A separate CodeQL workflow analyses both the Java backend and the TypeScript
+frontend, plus a weekly scheduled run so newly published advisories get caught against code that
+hasn't changed. The Trivy scan reports CRITICAL/HIGH findings without failing the build — most
+of what it finds at that severity lives in base-image OS packages outside this project's direct
+control, so treating it as a hard gate would block merges over CVEs nobody here can fix; see the
+workflow file for exactly where that line is drawn.
+
+SonarQube analysis (bugs, code smells, coverage, security hotspots) runs locally against a
+self-hosted instance — see [Running it](#static-analysis-locally) above — and optionally in CI
+against SonarCloud if a `SONAR_TOKEN` secret is configured; the CI step is skipped, not failed,
+when that secret is absent, so this workflow stays green on a fork with no SonarCloud account.
+
 ---
 
 ## API
@@ -307,6 +364,8 @@ corebank/
 │   └── config/        Security, caching, Kafka, OpenAPI, properties
 ├── src/main/resources/db/migration/   Flyway migrations
 ├── keycloak/corebank-realm.json       Realm, roles, clients and demo users
+├── observability/                     Prometheus scrape config, Tempo config, Grafana provisioning
+├── .github/workflows/                 CI (build/test/scan) and CodeQL
 ├── frontend/                          React + TypeScript SPA
 └── docs/LOCAL_SETUP.md                Standing up the environment on Windows
 ```
@@ -332,6 +391,7 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_REDIS_HOST` / `_PORT` | `localhost` / `6379` | |
 | `COREBANK_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | |
 | `COREBANK_ALLOWED_ORIGINS` | `http://localhost:5173` | CORS; comma-separated for more than one |
+| `COREBANK_OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | Where spans are exported to (Tempo, or any OTLP/HTTP collector) |
 | `SERVER_PORT` | `8080` | |
 
 The defaults exist so the project starts on a laptop with no setup. None of them are
@@ -342,12 +402,14 @@ real values pointing at wherever Keycloak actually runs in any environment beyon
 
 ## Scope, and what is deliberately not here
 
-Built across Phase 1 and Phase 2: Java 21 · Spring Boot · Spring Security · Hibernate ·
+Built across Phase 1, 2 and 3: Java 21 · Spring Boot · Spring Security · Hibernate ·
 PostgreSQL · REST · OpenAPI/Swagger · Docker · JUnit · Git · Keycloak/OIDC · Redis · Kafka ·
-React + TypeScript.
+React + TypeScript · OpenTelemetry · Prometheus · Grafana · GitHub Actions · CodeQL · Trivy ·
+SonarQube.
 
-Not yet, left for later phases by design: gRPC, Kubernetes, Terraform, AWS,
-OpenTelemetry/Prometheus/Grafana/OpenSearch, Testcontainers, REST Assured, k6, SonarQube/Trivy/
-CodeQL, and a Python/FastAPI/MLflow data-AI tier. The seams they will attach to already exist —
-a stateless application for horizontal scaling and Kubernetes, an append-only ledger already
-feeding Kafka for whatever downstream analytics or ML pipeline comes next.
+Not yet, left for later phases by design: gRPC, Kubernetes, Terraform, AWS, OpenSearch,
+Testcontainers, REST Assured, k6, and a Python/FastAPI/MLflow data-AI tier. The seams they will
+attach to already exist — a stateless application for horizontal scaling and Kubernetes, an
+append-only ledger already feeding Kafka for whatever downstream analytics or ML pipeline comes
+next, and a CI pipeline that a Kubernetes deploy step or a Terraform plan would slot into rather
+than replace.

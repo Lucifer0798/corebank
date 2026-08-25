@@ -23,6 +23,8 @@ import com.corebank.transaction.dto.TransferRequest;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
 import com.corebank.transaction.repository.BankTransactionRepository;
 import com.corebank.transaction.repository.LedgerEntryRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +34,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Answers;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -62,6 +65,11 @@ class TransactionServiceTest {
 
     @Mock
     private ApplicationEventPublisher eventPublisher;
+
+    // A real registry, not a mock: MeterRegistry.counter/summary return live meters that
+    // increment() and record() call directly, which a bare mock would just return null for.
+    @Spy
+    private MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks
     private TransactionService transactionService;
@@ -116,6 +124,8 @@ class TransactionServiceTest {
         assertThat(response.legs().get(1).balanceAfter()).isEqualByComparingTo("1250.00");
         assertThat(cash.getBalance()).isEqualByComparingTo("50250.00");
         verify(eventPublisher).publishEvent(org.mockito.ArgumentMatchers.any(TransactionPostedEvent.class));
+        assertThat(meterRegistry.counter("corebank.transactions.posted", "type", "DEPOSIT", "currency", "INR")
+                .count()).isEqualTo(1.0);
     }
 
     @Test

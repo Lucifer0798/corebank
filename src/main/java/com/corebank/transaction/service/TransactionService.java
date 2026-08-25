@@ -16,6 +16,7 @@ import com.corebank.transaction.dto.TransferRequest;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
 import com.corebank.transaction.repository.BankTransactionRepository;
 import com.corebank.transaction.repository.LedgerEntryRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Comparator;
@@ -43,17 +44,20 @@ public class TransactionService {
     private final AccountService accountService;
     private final ReferenceGenerator referenceGenerator;
     private final ApplicationEventPublisher eventPublisher;
+    private final MeterRegistry meterRegistry;
 
     public TransactionService(BankTransactionRepository transactions,
                               LedgerEntryRepository entries,
                               AccountService accountService,
                               ReferenceGenerator referenceGenerator,
-                              ApplicationEventPublisher eventPublisher) {
+                              ApplicationEventPublisher eventPublisher,
+                              MeterRegistry meterRegistry) {
         this.transactions = transactions;
         this.entries = entries;
         this.accountService = accountService;
         this.referenceGenerator = referenceGenerator;
         this.eventPublisher = eventPublisher;
+        this.meterRegistry = meterRegistry;
     }
 
     /** Cash in at the counter: the bank holds more cash, and owes the customer more. */
@@ -157,7 +161,19 @@ public class TransactionService {
         // Published now, but only actually sent to Kafka after this method's transaction
         // commits -- see TransactionEventPublisher.
         eventPublisher.publishEvent(TransactionPostedEvent.from(saved));
+        recordMetrics(saved);
         return TransactionResponse.from(saved);
+    }
+
+    private void recordMetrics(BankTransaction transaction) {
+        meterRegistry.counter("corebank.transactions.posted",
+                        "type", transaction.getType().name(),
+                        "currency", transaction.getCurrency())
+                .increment();
+        meterRegistry.summary("corebank.transactions.amount",
+                        "type", transaction.getType().name(),
+                        "currency", transaction.getCurrency())
+                .record(transaction.getAmount().doubleValue());
     }
 
     private BankTransaction newTransaction(TransactionType type, BigDecimal amount, String currency,
