@@ -77,7 +77,7 @@ jobs:
       # gate would block merges over CVEs nobody here can fix. Tighten exit-code to 1 once the
       # base image and dependency set are being actively kept current against advisories.
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: corebank-app:ci
           severity: CRITICAL,HIGH
