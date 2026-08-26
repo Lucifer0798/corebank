@@ -1,0 +1,67 @@
+# imagePullPolicy: Never because the image is loaded straight into the kind node's containerd via
+# `kind load docker-image corebank-app:latest --name corebank` (see docs/LOCAL_SETUP.md) rather
+# than pulled from a registry -- this is a local-only deployment, not a publish.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: corebank
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: app }
+  template:
+    metadata:
+      labels: { app: app }
+    spec:
+      # Plain Deployments have no equivalent of compose.yaml's `depends_on: condition:
+      # service_healthy` -- without this, the app container starts immediately alongside
+      # Postgres/Kafka/Keycloak, fails fast on the still-unreachable database (Spring Boot doesn't
+      # retry a failed datasource connection at startup), and crash-loops until Kubernetes'
+      # restart backoff happens to land after the dependency is ready. Confirmed against this real
+      # cluster: without these, `app` restarted 3 times on `Connection refused` before settling.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:17-alpine
+          command: ["sh", "-c", "until pg_isready -h postgres -p 5432 -U corebank; do sleep 2; done"]
+        - name: wait-for-kafka
+          image: apache/kafka:4.3.1
+          command: ["sh", "-c", "until /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092; do sleep 2; done"]
+        - name: wait-for-keycloak
+          image: busybox:1.37
+          command: ["sh", "-c", "until wget -q -O /dev/null http://keycloak:8080/realms/corebank/.well-known/openid-configuration; do sleep 2; done"]
+      containers:
+        - name: app
+          image: corebank-app:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef: { name: corebank-app-config }
+          env:
+            - name: COREBANK_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: corebank-secrets, key: postgres-password }
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: corebank
+spec:
+  selector: { app: app }
+  ports:
+    - port: 8080

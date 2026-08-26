@@ -1,0 +1,56 @@
+# KC_HOSTNAME stays http://localhost:8081, matching compose.yaml, because it must equal the
+# issuer-uri the app validates tokens against (COREBANK_OIDC_ISSUER_URI in app-config.yaml) --
+# reachable via `kubectl port-forward svc/keycloak 8081:8080 -n corebank`, exactly like compose
+# publishes it on the same host port.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: corebank
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: keycloak }
+  template:
+    metadata:
+      labels: { app: keycloak }
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.7.2
+          args: ["start-dev", "--import-realm"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KEYCLOAK_ADMIN
+              value: admin
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: corebank-secrets, key: keycloak-admin-password }
+            - name: KC_HOSTNAME
+              value: http://localhost:8081
+            - name: KC_HTTP_ENABLED
+              value: "true"
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+          readinessProbe:
+            httpGet:
+              path: /realms/corebank/.well-known/openid-configuration
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            failureThreshold: 30
+      volumes:
+        - name: realm-import
+          configMap: { name: keycloak-realm-import }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: corebank
+spec:
+  selector: { app: keycloak }
+  ports:
+    - port: 8080

@@ -1,0 +1,18 @@
+# Mirrors compose.yaml's app.environment block. The issuer-uri/jwk-set-uri split is unchanged
+# from compose for the same reason: issuer-uri is a logical value string-compared against each
+# token's `iss` claim and never dialed, so it stays http://localhost:8081 (reachable from the host
+# and from anyone who kubectl port-forward's Keycloak to that same port); jwk-set-uri is the one
+# actually fetched by the app pod, so it uses the in-cluster Service DNS name instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: corebank-app-config
+  namespace: corebank
+data:
+  COREBANK_DB_URL: jdbc:postgresql://postgres:5432/corebank
+  COREBANK_DB_USER: corebank
+  COREBANK_OIDC_ISSUER_URI: http://localhost:8081/realms/corebank
+  COREBANK_OIDC_JWK_SET_URI: http://keycloak:8080/realms/corebank/protocol/openid-connect/certs
+  COREBANK_REDIS_HOST: redis
+  COREBANK_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  COREBANK_ALLOWED_ORIGINS: http://localhost:5173

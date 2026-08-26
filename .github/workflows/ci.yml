@@ -27,6 +27,14 @@ jobs:
       - name: Build and test
         run: ./mvnw -B verify
 
+      # Excluded from the default test/verify run by Surefire's *IT naming convention (no
+      # failsafe plugin is configured) so the everyday loop stays fast; run explicitly here so
+      # it's still exercised on every push, per this project's practice of verifying against real
+      # running infrastructure rather than trusting config by inspection. GitHub's ubuntu-latest
+      # runners ship Docker, so Testcontainers works with no extra setup.
+      - name: Real-infrastructure integration tests (Testcontainers)
+        run: ./mvnw -B test -Dtest=CoreBankTestcontainersIT
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4

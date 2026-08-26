@@ -1,0 +1,74 @@
+# Single-node KRaft broker, same layout as compose.yaml's kafka service -- the Service name
+# `kafka` plays the same role the compose service name does, so KAFKA_ADVERTISED_LISTENERS and
+# KAFKA_CONTROLLER_QUORUM_VOTERS are unchanged from compose.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: corebank
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: kafka }
+  template:
+    metadata:
+      labels: { app: kafka }
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:4.3.1
+          ports:
+            - containerPort: 9092
+            - containerPort: 9093
+          env:
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://:9092,CONTROLLER://:9093
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://kafka:9092
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
+            # localhost, not the kafka Service name: a Kubernetes Service only routes to pods that
+            # already pass their readiness probe, so a single-node broker's controller-registration
+            # traffic to itself over the Service address deadlocks -- it can't become ready until
+            # registered, and can't register until the Service considers it ready. Confirmed
+            # against this real cluster: it crash-looped repeatedly on
+            # "unable to register with the controller quorum" until this changed. Controller and
+            # broker are the same process here, so loopback is correct, not a workaround.
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@localhost:9093
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: PLAINTEXT
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+          readinessProbe:
+            exec:
+              command: ["/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            # Kubernetes' own exec-probe timeoutSeconds default is 1s, which fails every single
+            # time here: the script boots a fresh JVM per invocation, which alone takes longer
+            # than that. compose.yaml's equivalent healthcheck already set timeout: 5s; this had
+            # no explicit value and inherited the too-short K8s default instead -- confirmed
+            # against this real cluster (readiness probe failed 63 times in a row with "command
+            # timed out after 1s" while the broker itself had already started cleanly).
+            timeoutSeconds: 10
+            failureThreshold: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: corebank
+spec:
+  selector: { app: kafka }
+  ports:
+    - name: plaintext
+      port: 9092
+    - name: controller
+      port: 9093

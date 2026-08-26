@@ -314,6 +314,103 @@ named volumes (`sonarqube-data`, `sonarqube-extensions`) across stop/start, just
 
 ---
 
+## 8. Testcontainers, REST Assured, k6
+
+**Testcontainers** (`CoreBankTestcontainersIT`) needs only Docker Desktop running — it starts
+and stops its own Postgres/Redis/Kafka/Keycloak containers per run, so nothing from section 4
+needs to be up first. Run it with `./mvnw test -Dtest=CoreBankTestcontainersIT`; see the
+[README](../README.md#against-real-infrastructure) for why it's excluded from the default
+`mvn test` run.
+
+**k6** has no standalone install on this machine — it runs from the `grafana/k6` Docker image
+instead, joined to the compose network so it can reach the app and Keycloak by their container
+DNS names (`app`, `keycloak`) rather than needing `--network host`, which Docker Desktop doesn't
+support the way native Linux does. See the [README](../README.md#load-testing-money-movement)
+for the exact command. **On Windows Git Bash, prefix it with `MSYS_NO_PATHCONV=1`** — without
+that, Git Bash rewrites the container path `/scripts` into a Windows host path
+(`C:/Program Files/Git/scripts`) before Docker ever sees it, and k6 fails to find the script.
+
+**REST Assured** is a test-scoped Maven dependency only (`io.rest-assured:rest-assured`) — it's
+the HTTP client `CoreBankTestcontainersIT` drives requests with, not a separate tool to install
+or run.
+
+---
+
+## 9. Kubernetes -- kind, locally
+
+### What is installed here
+
+`kind` v0.31.0 as a **standalone binary** at `C:\Akshay\tools\kind\kind.exe`, on the user `PATH`
+— same pattern as PostgreSQL in section 2, no administrator rights needed. `kubectl` v1.36.1
+comes bundled with Docker Desktop already, at
+`C:\Program Files\Docker\Docker\resources\bin\kubectl`. `helm` is not installed: this phase's
+manifests are plain YAML plus a `kustomization.yaml`, since Helm wasn't part of what this phase
+actually needed.
+
+```bash
+kind create cluster --name corebank
+```
+
+Creates a single-node cluster (control-plane doubles as worker) using Docker Desktop's existing
+engine — no separate VM, no cloud account. `kubectl cluster-info --context kind-corebank` and
+`kubectl get nodes` confirm it's up.
+
+### Deploying
+
+```bash
+docker compose build app
+bash k8s/deploy.sh
+```
+
+`deploy.sh` loads the locally built image straight into the kind node
+(`kind load docker-image corebank-app:latest --name corebank` — no registry involved), creates
+the one ConfigMap `kustomize` can't generate itself (the Keycloak realm import — see the comment
+in [k8s/kustomization.yaml](../k8s/kustomization.yaml) for why), applies everything else via
+`kubectl apply -k k8s/`, and waits for the app Deployment to roll out.
+
+```bash
+kubectl port-forward svc/app -n corebank 8080:8080
+kubectl port-forward svc/keycloak -n corebank 8081:8080
+```
+
+Same ports, same demo logins as the Compose stack. Tear the cluster down entirely with
+`kind delete cluster --name corebank` when done — it holds no state worth keeping between
+sessions.
+
+### Two bugs a real cluster found that compose.yaml never could
+
+**A single-node Kafka broker deadlocks registering its own controller through its own Service.**
+KRaft's `KAFKA_CONTROLLER_QUORUM_VOTERS` pointed at the `kafka` Service name, matching
+compose.yaml's pattern exactly — except a Kubernetes Service only routes to pods that already
+pass their readiness probe, and this pod can't pass readiness until it finishes registering with
+itself as controller. Confirmed against this real cluster: the pod crash-looped repeatedly on
+`unable to register with the controller quorum` until `KAFKA_CONTROLLER_QUORUM_VOTERS` pointed
+at `localhost` instead — correct anyway, since controller and broker are the same process in a
+single-node setup, not a workaround. See [k8s/kafka.yaml](../k8s/kafka.yaml).
+
+**Kubernetes' exec-probe default timeout is too short for a probe that boots a JVM.** Kafka's
+readiness probe runs `kafka-broker-api-versions.sh`, which launches a fresh JVM per invocation.
+compose.yaml's equivalent healthcheck already set `timeout: 5s` for exactly this reason; the K8s
+manifest didn't repeat it, so Kubernetes' own 1-second default applied instead — confirmed
+against this real cluster: 63 consecutive readiness failures logged as `command timed out after
+1s` while the broker itself had already started cleanly. Fixed with an explicit
+`timeoutSeconds: 10`.
+
+Neither of these has a compose.yaml equivalent to have caught them by comparison — compose has
+no concept of a Service routing only to ready pods, and Docker Compose healthchecks don't share
+Kubernetes' exec-probe timeout default. Both were only findable by actually standing up the
+cluster.
+
+**Plain Deployments have no `depends_on: condition: service_healthy`.** Without gating, the app
+container starts immediately alongside Postgres/Kafka/Keycloak, fails fast on the still-
+unreachable database (Spring Boot doesn't retry a failed datasource connection at startup), and
+crash-loops until Kubernetes' restart backoff happens to land after the dependency is ready.
+Confirmed against this real cluster: the app pod restarted 3 times on `Connection refused`
+before init containers (`k8s/app.yaml`) were added to gate its start on Postgres, Kafka and
+Keycloak all being reachable first.
+
+---
+
 ## Troubleshooting
 
 **Port 5432 already in use.** Something else is bound to it. `netstat -ano | findstr :5432`
@@ -390,3 +487,14 @@ wsl --install --no-distribution
 ```bash
 winget install --id Docker.DockerDesktop --exact --silent --accept-package-agreements --accept-source-agreements
 ```
+
+`kind`, without administrator rights:
+
+```bash
+mkdir -p /c/Akshay/tools/kind
+curl -fsSL -o /c/Akshay/tools/kind/kind.exe https://kind.sigs.k8s.io/dl/v0.31.0/kind-windows-amd64
+```
+
+Then add `C:\Akshay\tools\kind` to the user `PATH` (`[Environment]::SetEnvironmentVariable('Path',
+"$([Environment]::GetEnvironmentVariable('Path','User'));C:\Akshay\tools\kind", 'User')` in
+PowerShell).

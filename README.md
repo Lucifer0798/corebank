@@ -11,7 +11,9 @@ Phase 1 shipped the backend. Phase 2 added Keycloak as the identity provider, Re
 layer, Kafka as an event feed of every posting, and a React frontend that drives the whole
 system through a browser instead of curl. Phase 3 adds metrics and distributed tracing
 (OpenTelemetry, Prometheus, Grafana), a CI pipeline (GitHub Actions, CodeQL), and static/image
-security scanning (SonarQube, Trivy).
+security scanning (SonarQube, Trivy). Phase 4 adds a real-infrastructure test suite
+(Testcontainers, REST Assured), a k6 load test for money movement, and a Kubernetes deployment
+verified against a local `kind` cluster.
 
 ---
 
@@ -97,6 +99,37 @@ or Kafka is required — each request injects a fake authenticated principal dir
 `CoreBankApiIntegrationTest`), and Redis/Kafka being unreachable degrades to "no caching" and
 "events not published" rather than failing anything.
 
+### Against real infrastructure
+
+```bash
+./mvnw test -Dtest=CoreBankTestcontainersIT
+```
+
+`CoreBankTestcontainersIT` is `CoreBankApiIntegrationTest`'s counterpart: real PostgreSQL,
+Keycloak, Redis and Kafka via Testcontainers, driven with REST Assured, instead of a fake JWT
+and no broker. It's slow (containers dominate the runtime — budget ~90 seconds with warm
+images) and excluded from the default `mvn test`/`mvn verify` run by Surefire's `*Test`-only
+naming convention, so it stays out of the everyday loop; CI runs it explicitly as its own step
+on every push instead. It exists because four real bugs during Phase 2–4 — a Keycloak access
+token missing `sub`, Redis's serializer throwing on a cross-caller cache read, Kafka's producer
+blocking a request thread for 60s, and (during this suite's own development) the producer and
+consumer silently reverting to `StringSerializer` under test — were only ever visible against
+the genuinely running stack.
+
+### Load testing money movement
+
+```bash
+docker compose up -d
+MSYS_NO_PATHCONV=1 docker run --rm -i --network corebank_default -v "${PWD}/k6:/scripts" \
+  -e BASE_URL=http://app:8080 -e KEYCLOAK_URL=http://keycloak:8080 \
+  grafana/k6 run /scripts/money-movement.js
+```
+
+Ramps up to 20 virtual users driving deposits, withdrawals and transfers against a pool of
+pre-funded accounts, authenticating against the real Keycloak realm exactly like the frontend
+does. See [k6/money-movement.js](k6/money-movement.js) for the full set of `-e` overrides
+(`VUS`, `DURATION`, `ACCOUNT_POOL_SIZE`, ...). Drop `MSYS_NO_PATHCONV=1` outside Git Bash.
+
 ### Static analysis, locally
 
 ```bash
@@ -109,6 +142,33 @@ optional overlay rather than part of the default stack: heavy (a bundled Elastic
 couple of GB, a slow first start) and most projects would use SonarCloud in CI instead, which
 this repo's CI workflow supports too if you add a `SONAR_TOKEN` secret pointing at your own
 SonarCloud account. See [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for first-login details.
+
+### Kubernetes, locally
+
+```bash
+kind create cluster --name corebank
+docker compose build app
+bash k8s/deploy.sh
+```
+
+Deploys the same application image to a local, single-node `kind` cluster: Postgres, Redis,
+Kafka and Keycloak each as a Deployment + Service, the app wired to them the same way
+`compose.yaml` wires it, with init containers gating the app's startup on its dependencies
+(plain Kubernetes has no equivalent of `depends_on: condition: service_healthy`, so without them
+the app crash-loops until a dependency happens to be ready in time). See
+[k8s/deploy.sh](k8s/deploy.sh) for what it does and [k8s/kafka.yaml](k8s/kafka.yaml) for the two
+non-obvious fixes a real cluster forced: a single-node Kafka broker registering its own
+controller through the `kafka` Service deadlocks (a Service only routes to pods that already
+pass readiness, and this pod can't become ready until it registers), and the readiness probe's
+Kubernetes-default 1-second timeout is too short for a script that boots a fresh JVM per check.
+
+```bash
+kubectl port-forward svc/app -n corebank 8080:8080
+kubectl port-forward svc/keycloak -n corebank 8081:8080
+```
+
+Reach it exactly like the Docker Compose stack — same ports, same demo logins — once both are
+running.
 
 ---
 
@@ -365,6 +425,9 @@ corebank/
 ├── src/main/resources/db/migration/   Flyway migrations
 ├── keycloak/corebank-realm.json       Realm, roles, clients and demo users
 ├── observability/                     Prometheus scrape config, Tempo config, Grafana provisioning
+├── src/test/java/.../testcontainers/  CoreBankTestcontainersIT: real infra, not mocks
+├── k6/                                Load test for deposit/withdraw/transfer
+├── k8s/                               Kubernetes manifests + deploy.sh for a local kind cluster
 ├── .github/workflows/                 CI (build/test/scan) and CodeQL
 ├── frontend/                          React + TypeScript SPA
 └── docs/LOCAL_SETUP.md                Standing up the environment on Windows
@@ -402,14 +465,14 @@ real values pointing at wherever Keycloak actually runs in any environment beyon
 
 ## Scope, and what is deliberately not here
 
-Built across Phase 1, 2 and 3: Java 21 · Spring Boot · Spring Security · Hibernate ·
-PostgreSQL · REST · OpenAPI/Swagger · Docker · JUnit · Git · Keycloak/OIDC · Redis · Kafka ·
-React + TypeScript · OpenTelemetry · Prometheus · Grafana · GitHub Actions · CodeQL · Trivy ·
-SonarQube.
+Built across Phase 1–4: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
+OpenAPI/Swagger · Docker · JUnit · Git · Keycloak/OIDC · Redis · Kafka · React + TypeScript ·
+OpenTelemetry · Prometheus · Grafana · GitHub Actions · CodeQL · Trivy · SonarQube ·
+Testcontainers · REST Assured · k6 · Kubernetes (`kind`, locally).
 
-Not yet, left for later phases by design: gRPC, Kubernetes, Terraform, AWS, OpenSearch,
-Testcontainers, REST Assured, k6, and a Python/FastAPI/MLflow data-AI tier. The seams they will
-attach to already exist — a stateless application for horizontal scaling and Kubernetes, an
-append-only ledger already feeding Kafka for whatever downstream analytics or ML pipeline comes
-next, and a CI pipeline that a Kubernetes deploy step or a Terraform plan would slot into rather
+Not yet, left for later phases by design: gRPC, Terraform, AWS, OpenSearch, and a
+Python/FastAPI/MLflow data-AI tier. The seams they will attach to already exist — a stateless
+application already proven to run under Kubernetes for whatever a Terraform-provisioned cloud
+cluster comes next, an append-only ledger already feeding Kafka for whatever downstream
+analytics or ML pipeline comes next, and a CI pipeline a cloud deploy step would slot into rather
 than replace.
