@@ -25,7 +25,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 public class TransactionEventPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(TransactionEventPublisher.class);
-    static final String TOPIC = "corebank.transactions.posted";
+    public static final String TOPIC = "corebank.transactions.posted";
 
     private final KafkaTemplate<String, TransactionPostedEvent> kafkaTemplate;
 

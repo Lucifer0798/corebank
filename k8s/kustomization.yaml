@@ -9,6 +9,7 @@ resources:
   - redis.yaml
   - kafka.yaml
   - keycloak.yaml
+  - opensearch.yaml
   - app.yaml
 
 # keycloak-realm-import isn't generated here: kustomize refuses file references outside its own

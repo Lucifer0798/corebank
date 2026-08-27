@@ -14,7 +14,8 @@ import org.springframework.validation.annotation.Validated;
 public record CoreBankProperties(
         @Valid @NotNull Ledger ledger,
         @Valid @NotNull AccountSettings account,
-        @Valid @NotNull Web web) {
+        @Valid @NotNull Web web,
+        @Valid @NotNull Search search) {
 
     public record Ledger(
             @NotBlank String cashAccountNumber,
@@ -26,5 +27,8 @@ public record CoreBankProperties(
 
     /** Origins the browser-facing frontend is served from, for CORS. */
     public record Web(@NotEmpty List<String> allowedOrigins) {
+    }
+
+    public record Search(@NotBlank String opensearchUri) {
     }
 }

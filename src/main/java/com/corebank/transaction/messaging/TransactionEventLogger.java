@@ -15,7 +15,8 @@ public class TransactionEventLogger {
 
     private static final Logger log = LoggerFactory.getLogger(TransactionEventLogger.class);
 
-    @KafkaListener(topics = TransactionEventPublisher.TOPIC, groupId = "corebank-app")
+    @KafkaListener(topics = TransactionEventPublisher.TOPIC, groupId = "corebank-app",
+            containerFactory = "transactionListenerContainerFactory")
     public void onTransactionPosted(TransactionPostedEvent event) {
         log.info("[{}] {} {} {} legs={}", event.reference(), event.type(), event.amount(),
                 event.currency(), event.legs().size());

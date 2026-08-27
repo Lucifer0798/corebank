@@ -48,11 +48,14 @@ spring:
     consumer:
       group-id: corebank-app
       auto-offset-reset: earliest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
-      properties:
-        spring.json.value.default.type: com.corebank.transaction.messaging.TransactionPostedEvent
-        spring.json.trusted.packages: com.corebank.transaction.messaging
+      # No key/value-deserializer here, and no shared spring.json.value.default.type: every
+      # @KafkaListener in this app names an explicit containerFactory bean from
+      # KafkaConsumerConfig instead, each bound to the one concrete event type its topic carries
+      # -- the same "bind the concrete type, not a shared generic one" reasoning CacheConfig
+      # already applies to the Redis serializer. Setting a deserializer here as well as an
+      # instance on each typed factory is a combination Spring Kafka rejects outright
+      # (IllegalStateException: "not both"), so this section only carries what every consumer
+      # factory actually shares: where to connect and where to start reading from.
 
 server:
   port: ${SERVER_PORT:8080}
@@ -117,6 +120,8 @@ corebank:
   web:
     # Comma-separated list of origins the frontend is served from, for CORS.
     allowed-origins: ${COREBANK_ALLOWED_ORIGINS:http://localhost:5173}
+  search:
+    opensearch-uri: ${COREBANK_OPENSEARCH_URI:http://localhost:9200}
 
 logging:
   level:

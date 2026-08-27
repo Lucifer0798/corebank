@@ -29,6 +29,12 @@ corebank:
     number-prefix: "1001"
   web:
     allowed-origins: http://localhost:5173
+  search:
+    # Never actually reachable in this mocked-JWT/H2 suite -- OpenSearchClient construction is
+    # lazy (no network call), and every write to it is fire-and-forget and logs-and-swallows on
+    # failure, so this only needs to be a syntactically valid URI to satisfy CoreBankProperties'
+    # @NotBlank validation at context startup.
+    opensearch-uri: http://localhost:9200
 
 logging:
   level:

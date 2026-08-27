@@ -54,6 +54,20 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-kafka</artifactId>
 		</dependency>
+		<!-- The official low-level client, not the community Spring Data OpenSearch project: that
+		     one's Spring Boot 4.x compatibility wasn't established at the time this was added, and
+		     the low-level client gives full, predictable control the same way GenericContainer did
+		     for Keycloak in CoreBankTestcontainersIT: see that class for the precedent. -->
+		<dependency>
+			<groupId>org.opensearch.client</groupId>
+			<artifactId>opensearch-java</artifactId>
+			<version>3.9.0</version>
+		</dependency>
+		<dependency>
+			<groupId>org.opensearch.client</groupId>
+			<artifactId>opensearch-rest-client</artifactId>
+			<version>3.7.0</version>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-flyway</artifactId>

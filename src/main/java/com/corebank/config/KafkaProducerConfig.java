@@ -1,5 +1,6 @@
 package com.corebank.config;
 
+import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
 import java.util.Map;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -36,5 +37,19 @@ public class KafkaProducerConfig {
     public KafkaTemplate<String, TransactionPostedEvent> transactionEventKafkaTemplate(
             ProducerFactory<String, TransactionPostedEvent> transactionEventProducerFactory) {
         return new KafkaTemplate<>(transactionEventProducerFactory);
+    }
+
+    @Bean
+    public ProducerFactory<String, CustomerChangedEvent> customerEventProducerFactory(
+            KafkaProperties kafkaProperties) {
+        Map<String, Object> properties = kafkaProperties.buildProducerProperties();
+        properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, MAX_BLOCK_MS);
+        return new DefaultKafkaProducerFactory<>(properties);
+    }
+
+    @Bean
+    public KafkaTemplate<String, CustomerChangedEvent> customerEventKafkaTemplate(
+            ProducerFactory<String, CustomerChangedEvent> customerEventProducerFactory) {
+        return new KafkaTemplate<>(customerEventProducerFactory);
     }
 }

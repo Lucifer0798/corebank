@@ -9,11 +9,13 @@ import com.corebank.customer.domain.CustomerStatus;
 import com.corebank.customer.domain.KycStatus;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.dto.CustomerResponse;
+import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.customer.repository.CustomerRepository;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.Period;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -28,11 +30,14 @@ public class CustomerService {
     private final CustomerRepository customers;
     private final SequenceNumberGenerator sequences;
     private final Clock clock;
+    private final ApplicationEventPublisher eventPublisher;
 
-    public CustomerService(CustomerRepository customers, SequenceNumberGenerator sequences, Clock clock) {
+    public CustomerService(CustomerRepository customers, SequenceNumberGenerator sequences, Clock clock,
+                            ApplicationEventPublisher eventPublisher) {
         this.customers = customers;
         this.sequences = sequences;
         this.clock = clock;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -53,7 +58,9 @@ public class CustomerService {
         customer.setKycStatus(KycStatus.PENDING);
         customer.setStatus(CustomerStatus.ACTIVE);
 
-        return CustomerResponse.from(customers.save(customer));
+        Customer saved = customers.save(customer);
+        eventPublisher.publishEvent(CustomerChangedEvent.from(saved));
+        return CustomerResponse.from(saved);
     }
 
     @Transactional(readOnly = true)
@@ -81,6 +88,7 @@ public class CustomerService {
             throw new BusinessRuleException("CUSTOMER_CLOSED", "A closed customer cannot be re-reviewed");
         }
         customer.setKycStatus(kycStatus);
+        eventPublisher.publishEvent(CustomerChangedEvent.from(customer));
         return CustomerResponse.from(customer);
     }
 

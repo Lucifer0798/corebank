@@ -13,7 +13,8 @@ system through a browser instead of curl. Phase 3 adds metrics and distributed t
 (OpenTelemetry, Prometheus, Grafana), a CI pipeline (GitHub Actions, CodeQL), and static/image
 security scanning (SonarQube, Trivy). Phase 4 adds a real-infrastructure test suite
 (Testcontainers, REST Assured), a k6 load test for money movement, and a Kubernetes deployment
-verified against a local `kind` cluster.
+verified against a local `kind` cluster. Phase 5 adds bank-wide search: OpenSearch, fed by the
+same Kafka events Phase 2 already publishes, behind two new endpoints under `/api/v1/search`.
 
 ---
 
@@ -29,6 +30,7 @@ verified against a local `kind` cluster.
 | Security | Keycloak-issued JWTs, three realm roles. Customers can read only their own accounts. |
 | Caching | Account detail reads go through Redis with a short TTL; a Redis outage just means no caching. |
 | Events | Every posted transaction is published to Kafka once its database transaction commits. |
+| Search | Bank-wide, cross-account transaction and customer search (OpenSearch), fed by the same Kafka events -- not the per-account statement or unfiltered customer list, both Postgres-backed. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
 | Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements. |
 | Observability | Every request traced end to end (OpenTelemetry/Tempo); business and platform metrics in Grafana. |
@@ -45,14 +47,15 @@ verified against a local `kind` cluster.
 docker compose up --build
 ```
 
-Brings up PostgreSQL, Keycloak, Redis, Kafka, Kafka UI, Prometheus, Tempo, Grafana, and the
-application together. First build takes a few minutes. Once it's up:
+Brings up PostgreSQL, Keycloak, Redis, Kafka, Kafka UI, OpenSearch, Prometheus, Tempo, Grafana,
+and the application together. First build takes a few minutes. Once it's up:
 
 | | |
 | --- | --- |
 | API | <http://localhost:8080>, Swagger UI at `/swagger-ui.html` |
 | Keycloak admin console | <http://localhost:8081> (`admin` / `admin`) |
 | Kafka UI | <http://localhost:8082> — watch `corebank.transactions.posted` fill up as you post transactions |
+| OpenSearch | <http://localhost:9200> — `curl localhost:9200/corebank-transactions/_search` to see the raw documents |
 | Grafana | <http://localhost:3000> (no login needed) — the **CoreBank Overview** dashboard, and every request's trace under Explore → Tempo |
 | Prometheus | <http://localhost:9090> |
 | PostgreSQL | `localhost:5433` (not 5432 — see below) |
@@ -317,15 +320,32 @@ outage degrades to "no caching," never to a 500.
 Every posted transaction is published to the `corebank.transactions.posted` Kafka topic once
 its database transaction actually commits — a `@TransactionalEventListener(phase = AFTER_COMMIT)`
 listener does the send, so a transaction that rolls back (an optimistic-lock failure, a
-constraint violation) never reaches Kafka at all. A demo `@KafkaListener` logs what it consumes,
-standing in for whatever a later phase turns this into: a notifications service, a fraud
-pipeline, an audit export.
+constraint violation) never reaches Kafka at all. A demo `@KafkaListener` logs what it consumes;
+Phase 5's OpenSearch indexer is the second, real consumer of the same topic — see Search below.
+A customer create or KYC/status change publishes the same way, to `corebank.customers.changed`.
 
 Publishing is fire-and-forget: the ledger is the single source of truth, this topic is a
 downstream feed of it, and a broker outage should never fail an HTTP request that already
 succeeded and committed. The producer's `max.block.ms` is set to 3 seconds in
 `KafkaProducerConfig` — Kafka's client default is 60 seconds, which would otherwise hold the
 request thread hostage on every posting during a broker outage.
+
+### Search
+
+`GET /api/v1/search/transactions` and `GET /api/v1/search/customers` are bank-wide and
+cross-account — the gap the Postgres-backed statement endpoint (scoped to one account) and
+customer list (unfiltered) deliberately don't cover. Each is a Kafka consumer indexing into
+OpenSearch, not a query against the ledger: `TransactionSearchIndexer` and
+`CustomerSearchIndexer` consume the same two topics Events already publishes, in their own
+consumer group so they never interfere with the app's other listeners on those topics.
+
+OpenSearch is a downstream read projection, the same status Kafka and Redis already have here —
+never the source of truth for anything, and nothing else in the system depends on it being
+reachable. Building the client never itself talks to OpenSearch (lazy, like `KafkaTemplate`), so
+an outage at startup doesn't fail the application; a failed index attempt is logged and dropped,
+not retried, so a transient outage leaves a gap in the index rather than catching up
+automatically; and a failed search request comes back as a clean `503 SEARCH_UNAVAILABLE`
+instead of an unhandled `500`.
 
 ### Observability
 
@@ -385,6 +405,8 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/transfers` | TELLER, ADMIN | Transfer — needs `Idempotency-Key` |
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
+| `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
+| `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
 
 ### Error codes
 
@@ -420,8 +442,9 @@ corebank/
 │   ├── customer/      Onboarding, KYC, Keycloak identity linking
 │   ├── transaction/   Postings, the ledger, statements, Kafka publishing
 │   ├── idempotency/   Replay protection for money movement
+│   ├── search/        OpenSearch indexers (Kafka-fed) and the /search API
 │   ├── common/        Money, audit columns, errors, sequences
-│   └── config/        Security, caching, Kafka, OpenAPI, properties
+│   └── config/        Security, caching, Kafka, OpenSearch, OpenAPI, properties
 ├── src/main/resources/db/migration/   Flyway migrations
 ├── keycloak/corebank-realm.json       Realm, roles, clients and demo users
 ├── observability/                     Prometheus scrape config, Tempo config, Grafana provisioning
@@ -455,6 +478,7 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | |
 | `COREBANK_ALLOWED_ORIGINS` | `http://localhost:5173` | CORS; comma-separated for more than one |
 | `COREBANK_OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | Where spans are exported to (Tempo, or any OTLP/HTTP collector) |
+| `COREBANK_OPENSEARCH_URI` | `http://localhost:9200` | Search index; an outage degrades `/api/v1/search/**` to `503`, nothing else |
 | `SERVER_PORT` | `8080` | |
 
 The defaults exist so the project starts on a laptop with no setup. None of them are
@@ -465,13 +489,13 @@ real values pointing at wherever Keycloak actually runs in any environment beyon
 
 ## Scope, and what is deliberately not here
 
-Built across Phase 1–4: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
+Built across Phase 1–5: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
 OpenAPI/Swagger · Docker · JUnit · Git · Keycloak/OIDC · Redis · Kafka · React + TypeScript ·
 OpenTelemetry · Prometheus · Grafana · GitHub Actions · CodeQL · Trivy · SonarQube ·
-Testcontainers · REST Assured · k6 · Kubernetes (`kind`, locally).
+Testcontainers · REST Assured · k6 · Kubernetes (`kind`, locally) · OpenSearch.
 
-Not yet, left for later phases by design: gRPC, Terraform, AWS, OpenSearch, and a
-Python/FastAPI/MLflow data-AI tier. The seams they will attach to already exist — a stateless
+Not yet, left for later phases by design: gRPC, Terraform, AWS, and a Python/FastAPI/MLflow
+data-AI tier. The seams they will attach to already exist — a stateless
 application already proven to run under Kubernetes for whatever a Terraform-provisioned cloud
 cluster comes next, an append-only ledger already feeding Kafka for whatever downstream
 analytics or ML pipeline comes next, and a CI pipeline a cloud deploy step would slot into rather

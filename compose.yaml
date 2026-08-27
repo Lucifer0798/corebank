@@ -113,6 +113,24 @@ services:
     ports:
       - "3000:3000"
 
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      # Local dev only: no TLS, no auth, security plugin off entirely. Matches this project's
+      # existing local-dev posture (Grafana anonymous-admin, Keycloak default passwords) -- not
+      # something to carry into any environment beyond a laptop.
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
   app:
     build: .
     depends_on:
@@ -126,6 +144,8 @@ services:
         condition: service_started
       tempo:
         condition: service_started
+      opensearch:
+        condition: service_healthy
     environment:
       COREBANK_DB_URL: jdbc:postgresql://postgres:5432/corebank
       COREBANK_DB_USER: corebank
@@ -139,6 +159,7 @@ services:
       COREBANK_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       COREBANK_ALLOWED_ORIGINS: ${COREBANK_ALLOWED_ORIGINS:-http://localhost:5173}
       COREBANK_OTLP_TRACING_ENDPOINT: http://tempo:4318/v1/traces
+      COREBANK_OPENSEARCH_URI: http://opensearch:9200
     ports:
       - "8080:8080"
 

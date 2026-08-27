@@ -76,6 +76,17 @@ class CoreBankTestcontainersIT {
      * same container through the same mapped host:port.
      */
     @Container
+    static final GenericContainer<?> OPENSEARCH = new GenericContainer<>(
+            DockerImageName.parse("opensearchproject/opensearch:2.19.1"))
+            .withEnv("discovery.type", "single-node")
+            .withEnv("DISABLE_SECURITY_PLUGIN", "true")
+            .withEnv("OPENSEARCH_JAVA_OPTS", "-Xms512m -Xmx512m")
+            .withExposedPorts(9200)
+            .waitingFor(Wait.forHttp("/_cluster/health")
+                    .forStatusCode(200)
+                    .withStartupTimeout(Duration.ofMinutes(2)));
+
+    @Container
     static final GenericContainer<?> KEYCLOAK = new GenericContainer<>(
             DockerImageName.parse("quay.io/keycloak/keycloak:26.7.2"))
             .withCommand("start-dev", "--import-realm")
@@ -103,7 +114,7 @@ class CoreBankTestcontainersIT {
      * both callbacks.
      */
     static {
-        org.testcontainers.lifecycle.Startables.deepStart(POSTGRES, REDIS, KAFKA, KEYCLOAK).join();
+        org.testcontainers.lifecycle.Startables.deepStart(POSTGRES, REDIS, KAFKA, KEYCLOAK, OPENSEARCH).join();
     }
 
     @DynamicPropertySource
@@ -129,13 +140,17 @@ class CoreBankTestcontainersIT {
         // first time.
         registry.add("spring.kafka.producer.value-serializer",
                 () -> "org.springframework.kafka.support.serializer.JacksonJsonSerializer");
-        // Same shadowing on the consumer side: without it, the app's own @KafkaListener
-        // (TransactionEventLogger) fails every message with MessageConversionException trying to
-        // hand a raw JSON string to a handler expecting TransactionPostedEvent.
-        registry.add("spring.kafka.consumer.value-deserializer",
-                () -> "org.springframework.kafka.support.serializer.JacksonJsonDeserializer");
-        registry.add("spring.kafka.consumer.properties.spring.json.trusted.packages",
-                () -> "com.corebank.transaction.messaging");
+        // No consumer-side deserializer override needed (unlike the producer above): every
+        // @KafkaListener now names an explicit, per-type containerFactory from
+        // KafkaConsumerConfig instead of relying on the shared default consumer config, so
+        // there's nothing here left to shadow. Setting spring.kafka.consumer.value-deserializer
+        // here as well as those factories' own deserializer instances is exactly the
+        // "not both" combination KafkaConsumerConfig's own comment warns about -- confirmed by
+        // this suite failing to start with that exact IllegalStateException before this line was
+        // removed.
+
+        registry.add("corebank.search.opensearch-uri",
+                () -> "http://" + OPENSEARCH.getHost() + ":" + OPENSEARCH.getMappedPort(9200));
 
         String issuer = keycloakBaseUrl() + "/realms/corebank";
         registry.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", () -> issuer);
@@ -259,5 +274,69 @@ class CoreBankTestcontainersIT {
                             polled -> polled.count() > 0);
             assertThat(records.count()).isPositive();
         }
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("a new customer and its deposit both become searchable via real OpenSearch")
+    void searchIndexingRoundTrip() {
+        // A fresh customer/deposit rather than reusing Order(2)'s: distinctive names make the
+        // search assertions unambiguous, and this test's whole point -- that Kafka-driven
+        // indexing actually reaches a real OpenSearch, not a mock -- doesn't depend on anything
+        // Order(2) set up.
+        String uniqueLastName = "Opensearch" + UUID.randomUUID().toString().substring(0, 8);
+        String customerId = given()
+                .header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of(
+                        "firstName", "Search",
+                        "lastName", uniqueLastName,
+                        "email", "tc-search-" + UUID.randomUUID() + "@example.com",
+                        "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201)
+                .extract().path("id");
+
+        // A customer is indexed on create already (CustomerSearchIndexer), so no KYC step is
+        // needed just to prove indexing works -- search is a read projection of the customer
+        // record, not gated on KYC the way opening an account is.
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", uniqueLastName)
+                        .get("/search/customers")
+                        .then().statusCode(200)
+                        .body("totalHits", equalTo(1))
+                        .body("hits[0].lastName", equalTo(uniqueLastName)));
+
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("kycStatus", "VERIFIED"))
+                .patch("/customers/{id}/kyc", customerId)
+                .then().statusCode(200);
+
+        String accountId = given()
+                .header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("customerId", customerId, "accountType", "SAVINGS"))
+                .post("/accounts")
+                .then().statusCode(201)
+                .extract().path("id");
+
+        String uniqueDescription = "tc-search-marker-" + UUID.randomUUID();
+        given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", "tc-search-deposit-" + UUID.randomUUID())
+                .contentType(ContentType.JSON)
+                .body(Map.of("amount", 750.00, "description", uniqueDescription))
+                .post("/accounts/{id}/deposits", accountId)
+                .then().statusCode(201);
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", uniqueDescription)
+                        .get("/search/transactions")
+                        .then().statusCode(200)
+                        .body("totalHits", equalTo(1))
+                        .body("hits[0].description", equalTo(uniqueDescription))
+                        .body("hits[0].amount", equalTo(750.00f)));
     }
 }

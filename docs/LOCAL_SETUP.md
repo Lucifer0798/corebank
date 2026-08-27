@@ -171,6 +171,7 @@ cluster. They are entirely separate databases with separate data.
 | 8081 | Keycloak |
 | 8082 | Kafka UI |
 | 6379 | Redis |
+| 9200 | OpenSearch |
 | 3000 | Grafana |
 | 9090 | Prometheus |
 | 3200 / 4318 | Tempo (API / OTLP receiver) |
@@ -408,6 +409,43 @@ crash-loops until Kubernetes' restart backoff happens to land after the dependen
 Confirmed against this real cluster: the app pod restarted 3 times on `Connection refused`
 before init containers (`k8s/app.yaml`) were added to gate its start on Postgres, Kafka and
 Keycloak all being reachable first.
+
+---
+
+## 10. OpenSearch (search)
+
+Comes from `docker compose up`, same as Keycloak/Redis/Kafka -- no host-native install. Unlike
+those three, the app deliberately does **not** wait for it at startup (no `wait-for-opensearch`
+init container in `k8s/app.yaml` either): search is a downstream projection, and the app is
+designed to start and serve every other endpoint whether or not OpenSearch is up yet. Confirmed
+against both the real compose stack and the real `kind` cluster -- the app pod comes up healthy
+with 0 restarts even when OpenSearch is still initializing.
+
+```bash
+curl http://localhost:9200/corebank-transactions/_search
+curl http://localhost:9200/corebank-customers/_search
+```
+
+to see the raw indexed documents. Both indices are created automatically on startup
+(`SearchIndexInitializer`) if they don't already exist.
+
+**Two real bugs this integration found, neither catchable without a real Kafka listener
+container actually starting:**
+
+- **Supplying both a `spring.kafka.consumer.value-deserializer` property and a deserializer
+  *instance* to a `ConsumerFactory` is a combination Spring Kafka rejects outright** with
+  `IllegalStateException: JsonDeserializer must be configured with property setters, or via
+  configuration properties; not both`. This only surfaces when a listener container actually
+  tries to start a real consumer -- the mocked-JWT test suite never does, so it stayed invisible
+  until `docker compose up` actually booted the app. Fixed in `KafkaConsumerConfig` by stripping
+  `key/value.deserializer` out of `kafkaProperties.buildConsumerProperties()` before handing the
+  map to `DefaultKafkaConsumerFactory`, since every listener here supplies its own typed
+  deserializer instance instead of relying on that YAML property.
+- **The OpenSearch Java client's Jackson-based response deserializer fails hard on any indexed
+  field a DTO doesn't declare** (`UnrecognizedPropertyException`), the opposite of Spring's own
+  `@JsonIgnoreProperties`-free default elsewhere in this codebase. `CustomerSearchHit` doesn't
+  expose the index document's `changedAt` field, and every single search request 500'd until
+  `@JsonIgnoreProperties(ignoreUnknown = true)` was added to both search-result DTOs.
 
 ---
 
