@@ -68,6 +68,13 @@
 			<artifactId>opensearch-rest-client</artifactId>
 			<version>3.7.0</version>
 		</dependency>
+		<!-- Boot 4.1 manages Spring gRPC, grpc-java and protobuf-java versions itself, so none of
+		     these carry an explicit <version>; the protoc binary is downloaded by the
+		     protobuf-maven-plugin below rather than needing a local install. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-grpc-server</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-flyway</artifactId>
@@ -255,6 +262,31 @@
 						</path>
 					</annotationProcessorPaths>
 				</configuration>
+			</plugin>
+			<plugin>
+				<!-- Generates the message and stub classes from src/main/proto into
+				     target/generated-sources. Version comes from Boot's own pluginManagement, so
+				     the protoc and grpc-java plugin binaries it downloads stay in step with the
+				     protobuf-java and grpc-java jars Boot puts on the classpath. -->
+				<groupId>io.github.ascopes</groupId>
+				<artifactId>protobuf-maven-plugin</artifactId>
+				<configuration>
+					<protocVersion>${protobuf-java.version}</protocVersion>
+					<binaryMavenPlugins>
+						<binaryMavenPlugin>
+							<groupId>io.grpc</groupId>
+							<artifactId>protoc-gen-grpc-java</artifactId>
+							<version>${grpc-java.version}</version>
+						</binaryMavenPlugin>
+					</binaryMavenPlugins>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>generate</goal>
+						</goals>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>

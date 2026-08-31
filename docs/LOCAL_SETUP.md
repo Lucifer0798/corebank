@@ -172,6 +172,7 @@ cluster. They are entirely separate databases with separate data.
 | 8082 | Kafka UI |
 | 6379 | Redis |
 | 9200 | OpenSearch |
+| 9091 | The application's gRPC listener (9090 is Prometheus) |
 | 3000 | Grafana |
 | 9090 | Prometheus |
 | 3200 / 4318 | Tempo (API / OTLP receiver) |
@@ -449,6 +450,81 @@ container actually starting:**
 
 ---
 
+## 11. gRPC
+
+Nothing to install. The stub and message classes are generated into `target/generated-sources`
+by `io.github.ascopes:protobuf-maven-plugin` during `mvn compile`, and the plugin downloads its
+own `protoc` and `protoc-gen-grpc-java` binaries — there is no host `protoc` on this machine and
+none is needed.
+
+The server listens on **9091** (9090 is Prometheus) with reflection enabled, so tooling can
+discover the contract without a local copy of the `.proto`:
+
+```bash
+docker run --rm --network corebank_default fullstorydev/grpcurl -plaintext app:9091 list
+```
+
+`grpcurl` is not installed either — run it from its image, joined to the compose network, for
+the same reason k6 is run that way (see the `--network host` note in section 8). Calls need the
+same bearer token REST does, passed as metadata:
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" \
+  -d '{"account_id":"<uuid>"}' localhost:9091 corebank.v1.AccountQueryService/GetAccount
+```
+
+**The Spring gRPC config prefix is `spring.grpc.server.*`, not `grpc.server.*`.** Getting this
+wrong is silent — the app starts fine and the server comes up, just on the library's default
+port instead of the configured one, and nothing warns you. Verified against the property names
+in `spring-boot-grpc-server`'s own `spring-configuration-metadata.json` rather than assumed.
+
+**There is no `@LocalServerPort` equivalent for the gRPC port.** `spring.grpc.server.port: 0`
+binds a random port, but nothing exposes the bound number back to a test, so
+`CoreBankTestcontainersIT` pins a fixed high port (19091) instead. The mocked-JWT suite in
+`src/test/resources/application.yml` does use port 0 — it never calls gRPC, and a fixed port
+there would collide with a locally running app or a second test context.
+
+---
+
+## 12. Terraform (local `kind` only)
+
+### What is installed here
+
+Terraform **1.16.0** as a standalone binary at `C:\Akshay\tools\terraform\terraform.exe`, on the
+user `PATH` — the same no-admin-rights pattern as PostgreSQL and `kind`.
+
+```bash
+cd terraform
+terraform init
+terraform apply
+```
+
+Provisions the `kind` cluster, loads the locally built `corebank-app:latest` into its node,
+applies `k8s/`, and waits for the app rollout. `terraform destroy` removes the cluster. This
+replaces `k8s/deploy.sh`, which still works if the cluster already exists.
+
+**No AWS, and no cloud provider at all** — this is deliberate scope, not an omission. Everything
+here runs against the local Docker engine and costs nothing.
+
+### Design notes worth knowing before editing it
+
+- **The manifests are applied with `kubectl apply -k`, not re-expressed as Terraform resources.**
+  Typed `kubernetes_*` resources would duplicate eleven already-verified manifests, free to drift
+  from the ones `k8s/` still holds; `kubernetes_manifest` does a server-side dry run at *plan*
+  time, so it cannot describe objects in a cluster the same configuration is still creating
+  (it would force a two-stage `terraform apply -target=...` just to bootstrap). The honest cost:
+  Terraform tracks *that* the manifests are applied, not each object's state.
+- **`kind load docker-image` is a `local-exec`** because no provider models transferring an image
+  into a kind node's containerd. It re-runs when the cluster is recreated, since a fresh node
+  starts with empty containerd and `k8s/app.yaml` pins `imagePullPolicy: Never`.
+- **`var.shell_interpreter` defaults to Git Bash.** Terraform's `local-exec` uses `cmd.exe` on
+  Windows, which handles the `kubectl create ... | kubectl apply -f -` pipes differently. Override
+  it to `["/bin/sh", "-c"]` on Linux or macOS.
+- **State is gitignored, the lock file is not.** `terraform.tfstate` describes one machine's own
+  throwaway cluster; `.terraform.lock.hcl` pins provider versions and belongs in the repo.
+
+---
+
 ## Troubleshooting
 
 **Port 5432 already in use.** Something else is bound to it. `netstat -ano | findstr :5432`
@@ -536,3 +612,13 @@ curl -fsSL -o /c/Akshay/tools/kind/kind.exe https://kind.sigs.k8s.io/dl/v0.31.0/
 Then add `C:\Akshay\tools\kind` to the user `PATH` (`[Environment]::SetEnvironmentVariable('Path',
 "$([Environment]::GetEnvironmentVariable('Path','User'));C:\Akshay\tools\kind", 'User')` in
 PowerShell).
+
+Terraform, also without administrator rights:
+
+```bash
+mkdir -p /c/Akshay/tools/terraform && cd /c/Akshay/tools/terraform
+curl -sL -o terraform.zip https://releases.hashicorp.com/terraform/1.16.0/terraform_1.16.0_windows_amd64.zip
+unzip -o terraform.zip && rm terraform.zip
+```
+
+Then add `C:\Akshay\tools\terraform` to the user `PATH` the same way.

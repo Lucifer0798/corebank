@@ -82,8 +82,14 @@ public class SecurityConfig {
      * claim, so this reads that structure directly instead of using
      * {@link org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter},
      * which only understands flat claims.
+     *
+     * <p>Exposed as a bean rather than kept private because the gRPC surface authenticates with
+     * it too ({@code JwtServerInterceptor}). Sharing the one instance is what guarantees a token
+     * grants exactly the same authorities over gRPC as over HTTP -- two separate converters
+     * would be free to drift apart silently.
      */
-    private JwtAuthenticationConverter jwtAuthenticationConverter() {
+    @Bean
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(new RealmRoleConverter());
         return converter;

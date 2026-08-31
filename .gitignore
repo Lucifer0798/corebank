@@ -35,3 +35,20 @@ build/
 ### CoreBank ###
 *.log
 .env
+
+### Terraform ###
+# State describes one machine's own local kind cluster and is not shareable. The lock file is
+# deliberately NOT ignored, so provider versions stay pinned across machines.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+.terraform.tfstate.lock.info
+# The tehcyx/kind provider writes a kubeconfig named <cluster_name>-config into the Terraform
+# working directory as a side effect of creating a cluster -- nothing in main.tf asks for it, and
+# it reappears on every apply. It embeds the cluster CA *and a client private key*, so it must
+# never be committed. `terraform output kubectl_context` is the supported way in; kind already
+# merges the same context into ~/.kube/config.
+terraform/*-config

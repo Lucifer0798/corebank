@@ -15,6 +15,8 @@ security scanning (SonarQube, Trivy). Phase 4 adds a real-infrastructure test su
 (Testcontainers, REST Assured), a k6 load test for money movement, and a Kubernetes deployment
 verified against a local `kind` cluster. Phase 5 adds bank-wide search: OpenSearch, fed by the
 same Kafka events Phase 2 already publishes, behind two new endpoints under `/api/v1/search`.
+Phase 6 adds a gRPC read surface over the same service layer, and moves the local Kubernetes
+deployment from a shell script to Terraform.
 
 ---
 
@@ -31,6 +33,7 @@ same Kafka events Phase 2 already publishes, behind two new endpoints under `/ap
 | Caching | Account detail reads go through Redis with a short TTL; a Redis outage just means no caching. |
 | Events | Every posted transaction is published to Kafka once its database transaction commits. |
 | Search | Bank-wide, cross-account transaction and customer search (OpenSearch), fed by the same Kafka events -- not the per-account statement or unfiltered customer list, both Postgres-backed. |
+| gRPC | A read-only service-to-service surface (accounts, transactions, streamed statements) over the same service layer and the same Keycloak tokens as REST. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
 | Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements. |
 | Observability | Every request traced end to end (OpenTelemetry/Tempo); business and platform metrics in Grafana. |
@@ -53,6 +56,7 @@ and the application together. First build takes a few minutes. Once it's up:
 | | |
 | --- | --- |
 | API | <http://localhost:8080>, Swagger UI at `/swagger-ui.html` |
+| gRPC | `localhost:9091`, plaintext with reflection on — `grpcurl -plaintext localhost:9091 list` |
 | Keycloak admin console | <http://localhost:8081> (`admin` / `admin`) |
 | Kafka UI | <http://localhost:8082> — watch `corebank.transactions.posted` fill up as you post transactions |
 | OpenSearch | <http://localhost:9200> — `curl localhost:9200/corebank-transactions/_search` to see the raw documents |
@@ -146,31 +150,45 @@ couple of GB, a slow first start) and most projects would use SonarCloud in CI i
 this repo's CI workflow supports too if you add a `SONAR_TOKEN` secret pointing at your own
 SonarCloud account. See [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for first-login details.
 
-### Kubernetes, locally
+### Kubernetes, locally — via Terraform
 
 ```bash
-kind create cluster --name corebank
 docker compose build app
-bash k8s/deploy.sh
+cd terraform && terraform init && terraform apply
 ```
 
-Deploys the same application image to a local, single-node `kind` cluster: Postgres, Redis,
-Kafka and Keycloak each as a Deployment + Service, the app wired to them the same way
-`compose.yaml` wires it, with init containers gating the app's startup on its dependencies
-(plain Kubernetes has no equivalent of `depends_on: condition: service_healthy`, so without them
-the app crash-loops until a dependency happens to be ready in time). See
-[k8s/deploy.sh](k8s/deploy.sh) for what it does and [k8s/kafka.yaml](k8s/kafka.yaml) for the two
-non-obvious fixes a real cluster forced: a single-node Kafka broker registering its own
-controller through the `kafka` Service deadlocks (a Service only routes to pods that already
-pass readiness, and this pod can't become ready until it registers), and the readiness probe's
-Kubernetes-default 1-second timeout is too short for a script that boots a fresh JVM per check.
+Creates the `kind` cluster, loads the locally built image into it, applies the manifests and
+waits for the rollout — everything [k8s/deploy.sh](k8s/deploy.sh) did, but with the cluster
+itself (node image, topology, Kubernetes version) as a checked-in description `terraform plan`
+can diff against reality rather than as flags someone has to remember. `terraform destroy` tears
+the whole cluster down.
+
+The manifests stay a kustomization applied by `kubectl apply -k`, deliberately, rather than being
+re-expressed as typed Terraform resources: that would create a second copy of every Deployment
+and Service, free to drift from the ones `k8s/` still holds. The trade-off is explicit —
+Terraform tracks *that* the manifests are applied, not the state of each object inside them;
+`kubectl diff -k k8s/` remains the tool for that. See [terraform/main.tf](terraform/main.tf),
+where each of these choices is argued at the resource it affects.
+
+`bash k8s/deploy.sh` still works and is the shorter path if the cluster already exists.
+
+Either way the deployed stack is the same: Postgres, Redis, Kafka, Keycloak and OpenSearch each
+as a Deployment + Service, the app wired to them the way `compose.yaml` wires it, with init
+containers gating the app's startup on its dependencies (plain Kubernetes has no equivalent of
+`depends_on: condition: service_healthy`, so without them the app crash-loops until a dependency
+happens to be ready in time). See [k8s/kafka.yaml](k8s/kafka.yaml) for the two non-obvious fixes
+a real cluster forced: a single-node Kafka broker registering its own controller through the
+`kafka` Service deadlocks (a Service only routes to pods that already pass readiness, and this
+pod can't become ready until it registers), and the readiness probe's Kubernetes-default
+1-second timeout is too short for a script that boots a fresh JVM per check.
 
 ```bash
 kubectl port-forward svc/app -n corebank 8080:8080
+kubectl port-forward svc/app -n corebank 9091:9091
 kubectl port-forward svc/keycloak -n corebank 8081:8080
 ```
 
-Reach it exactly like the Docker Compose stack — same ports, same demo logins — once both are
+Reach it exactly like the Docker Compose stack — same ports, same demo logins — once these are
 running.
 
 ---
@@ -347,6 +365,29 @@ not retried, so a transient outage leaves a gap in the index rather than catchin
 automatically; and a failed search request comes back as a clean `503 SEARCH_UNAVAILABLE`
 instead of an unhandled `500`.
 
+### gRPC
+
+A second, **read-only** surface on port `9091`, defined by
+[src/main/proto/corebank.proto](src/main/proto/corebank.proto): fetch an account, list a
+customer's accounts, fetch a transaction, and stream a statement. Money movement stays on REST
+on purpose — it needs the `Idempotency-Key` contract and the RFC 7807 error bodies the HTTP API
+already defines, and a second implementation of the one thing in this system that must never
+post twice would be a liability, not a feature.
+
+Both surfaces are views of one service layer. The gRPC services call the same `AccountService`
+and `TransactionService` beans the controllers do, so caching, ledger rules and ownership checks
+live in one place; `JwtServerInterceptor` authenticates with the very `JwtDecoder` and
+`JwtAuthenticationConverter` beans `SecurityConfig` builds for the HTTP filter chain, so a token
+cannot grant different authorities depending on which port it arrives on.
+
+`StreamStatement` is server-streaming rather than paged — a statement is unbounded in principle,
+and a caller can start work on the first lines before the last are read. Amounts cross the wire
+as strings, never doubles: proto3 has no decimal type, and a double would reintroduce exactly the
+binary floating-point error the ledger is built to avoid. `GrpcExceptionInterceptor` maps the
+application's own `ApiException` hierarchy onto gRPC statuses and puts the same stable `code` the
+JSON API returns into `corebank-code` trailing metadata, so a gRPC client branches on the same
+tokens an HTTP client does.
+
 ### Observability
 
 Every request is traced end to end with OpenTelemetry (via Micrometer Tracing's OTel bridge,
@@ -408,6 +449,18 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
 | `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
 
+### gRPC (port 9091)
+
+Read-only; see [src/main/proto/corebank.proto](src/main/proto/corebank.proto). Same bearer token
+as REST, passed as `authorization` metadata.
+
+| Service | RPC | Role |
+| --- | --- | --- |
+| `AccountQueryService` | `GetAccount` | owner, staff |
+| `AccountQueryService` | `ListCustomerAccounts` | owner, staff |
+| `TransactionQueryService` | `GetTransaction` | TELLER, ADMIN |
+| `TransactionQueryService` | `StreamStatement` (server-streaming) | owner, staff |
+
 ### Error codes
 
 | Code | Status | Meaning |
@@ -443,14 +496,17 @@ corebank/
 │   ├── transaction/   Postings, the ledger, statements, Kafka publishing
 │   ├── idempotency/   Replay protection for money movement
 │   ├── search/        OpenSearch indexers (Kafka-fed) and the /search API
+│   ├── grpc/          gRPC services, auth and error interceptors, proto mapping
 │   ├── common/        Money, audit columns, errors, sequences
 │   └── config/        Security, caching, Kafka, OpenSearch, OpenAPI, properties
+├── src/main/proto/corebank.proto      The gRPC contract
 ├── src/main/resources/db/migration/   Flyway migrations
 ├── keycloak/corebank-realm.json       Realm, roles, clients and demo users
 ├── observability/                     Prometheus scrape config, Tempo config, Grafana provisioning
 ├── src/test/java/.../testcontainers/  CoreBankTestcontainersIT: real infra, not mocks
 ├── k6/                                Load test for deposit/withdraw/transfer
 ├── k8s/                               Kubernetes manifests + deploy.sh for a local kind cluster
+├── terraform/                         Provisions that kind cluster and applies k8s/ to it
 ├── .github/workflows/                 CI (build/test/scan) and CodeQL
 ├── frontend/                          React + TypeScript SPA
 └── docs/LOCAL_SETUP.md                Standing up the environment on Windows
@@ -479,6 +535,7 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_ALLOWED_ORIGINS` | `http://localhost:5173` | CORS; comma-separated for more than one |
 | `COREBANK_OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | Where spans are exported to (Tempo, or any OTLP/HTTP collector) |
 | `COREBANK_OPENSEARCH_URI` | `http://localhost:9200` | Search index; an outage degrades `/api/v1/search/**` to `503`, nothing else |
+| `COREBANK_GRPC_PORT` | `9091` | gRPC listener; 9091 rather than 9090, which Prometheus owns |
 | `SERVER_PORT` | `8080` | |
 
 The defaults exist so the project starts on a laptop with no setup. None of them are
@@ -489,14 +546,16 @@ real values pointing at wherever Keycloak actually runs in any environment beyon
 
 ## Scope, and what is deliberately not here
 
-Built across Phase 1–5: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
+Built across Phase 1–6: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
 OpenAPI/Swagger · Docker · JUnit · Git · Keycloak/OIDC · Redis · Kafka · React + TypeScript ·
 OpenTelemetry · Prometheus · Grafana · GitHub Actions · CodeQL · Trivy · SonarQube ·
-Testcontainers · REST Assured · k6 · Kubernetes (`kind`, locally) · OpenSearch.
+Testcontainers · REST Assured · k6 · Kubernetes (`kind`, locally) · OpenSearch · gRPC/protobuf ·
+Terraform (local `kind` only).
 
-Not yet, left for later phases by design: gRPC, Terraform, AWS, and a Python/FastAPI/MLflow
-data-AI tier. The seams they will attach to already exist — a stateless
-application already proven to run under Kubernetes for whatever a Terraform-provisioned cloud
-cluster comes next, an append-only ledger already feeding Kafka for whatever downstream
+Not yet, left for later phases by design: AWS (and the cloud half of Terraform), and a
+Python/FastAPI/MLflow data-AI tier. The seams they will attach to already exist — a stateless
+application already proven to run under Kubernetes and already provisioned by Terraform, so a
+cloud cluster is a provider change rather than a rewrite, an append-only ledger already feeding
+Kafka for whatever downstream
 analytics or ML pipeline comes next, and a CI pipeline a cloud deploy step would slot into rather
 than replace.

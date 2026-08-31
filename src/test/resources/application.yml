@@ -36,6 +36,14 @@ corebank:
     # @NotBlank validation at context startup.
     opensearch-uri: http://localhost:9200
 
+spring.grpc:
+  server:
+    # Port 0, not the real 9091: this suite doesn't exercise gRPC (it has no real Keycloak to
+    # mint a token the interceptor would accept), but the server still starts with the context,
+    # and a fixed port would collide with a locally running app or with a second test context.
+    # CoreBankTestcontainersIT pins its own port instead, since it does call the gRPC surface.
+    port: 0
+
 logging:
   level:
     com.corebank: DEBUG

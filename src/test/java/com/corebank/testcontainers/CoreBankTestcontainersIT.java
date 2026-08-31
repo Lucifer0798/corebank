@@ -2,10 +2,25 @@ package com.corebank.testcontainers;
 
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 
+import com.corebank.grpc.proto.AccountQueryServiceGrpc;
+import com.corebank.grpc.proto.GetAccountRequest;
+import com.corebank.grpc.proto.ListCustomerAccountsRequest;
+import com.corebank.grpc.proto.ListCustomerAccountsResponse;
+import com.corebank.grpc.proto.StatementLine;
+import com.corebank.grpc.proto.StreamStatementRequest;
+import com.corebank.grpc.proto.TransactionQueryServiceGrpc;
 import com.redis.testcontainers.RedisContainer;
+import io.grpc.ClientInterceptor;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.Metadata;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
+import io.grpc.stub.MetadataUtils;
 import io.restassured.RestAssured;
 import io.restassured.http.ContentType;
 import java.time.Duration;
@@ -152,6 +167,12 @@ class CoreBankTestcontainersIT {
         registry.add("corebank.search.opensearch-uri",
                 () -> "http://" + OPENSEARCH.getHost() + ":" + OPENSEARCH.getMappedPort(9200));
 
+        // A fixed port rather than 0: Spring gRPC exposes no @LocalServerPort equivalent to read
+        // a randomly-bound one back from, so the test has to know the number in advance. Well
+        // outside the range compose.yaml and the app's own defaults use, to avoid colliding with
+        // a locally running stack.
+        registry.add("spring.grpc.server.port", () -> GRPC_TEST_PORT);
+
         String issuer = keycloakBaseUrl() + "/realms/corebank";
         registry.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", () -> issuer);
         registry.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri",
@@ -161,6 +182,8 @@ class CoreBankTestcontainersIT {
     private static String keycloakBaseUrl() {
         return "http://" + KEYCLOAK.getHost() + ":" + KEYCLOAK.getMappedPort(8080);
     }
+
+    private static final int GRPC_TEST_PORT = 19091;
 
     @LocalServerPort
     private int port;
@@ -338,5 +361,114 @@ class CoreBankTestcontainersIT {
                         .body("totalHits", equalTo(1))
                         .body("hits[0].description", equalTo(uniqueDescription))
                         .body("hits[0].amount", equalTo(750.00f)));
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("the gRPC surface serves the same data as REST, over a real channel with a real token")
+    void grpcReadsMatchRest() {
+        // Set up over REST, read back over gRPC: the point of the assertion is that both
+        // surfaces are views of one service layer, so the numbers have to agree exactly --
+        // including the BigDecimal amounts, which proto3 carries as strings precisely so they
+        // survive the trip without going through a double.
+        String customerId = given()
+                .header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of(
+                        "firstName", "Grpc",
+                        "lastName", "Verification",
+                        "email", "tc-grpc-" + UUID.randomUUID() + "@example.com",
+                        "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201)
+                .extract().path("id");
+
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("kycStatus", "VERIFIED"))
+                .patch("/customers/{id}/kyc", customerId)
+                .then().statusCode(200);
+
+        String accountId = given()
+                .header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("customerId", customerId, "accountType", "SAVINGS"))
+                .post("/accounts")
+                .then().statusCode(201)
+                .extract().path("id");
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", "tc-grpc-deposit-" + UUID.randomUUID())
+                .contentType(ContentType.JSON)
+                .body(Map.of("amount", 1234.56, "description", "gRPC verification deposit"))
+                .post("/accounts/{id}/deposits", accountId)
+                .then().statusCode(201);
+
+        ManagedChannel channel = ManagedChannelBuilder
+                .forAddress("localhost", GRPC_TEST_PORT)
+                .usePlaintext()
+                .build();
+        try {
+            AccountQueryServiceGrpc.AccountQueryServiceBlockingStub accounts =
+                    AccountQueryServiceGrpc.newBlockingStub(channel).withInterceptors(bearer(tellerToken));
+            TransactionQueryServiceGrpc.TransactionQueryServiceBlockingStub transactions =
+                    TransactionQueryServiceGrpc.newBlockingStub(channel).withInterceptors(bearer(tellerToken));
+
+            com.corebank.grpc.proto.Account account = accounts.getAccount(
+                    GetAccountRequest.newBuilder().setAccountId(accountId).build());
+            assertThat(account.getId()).isEqualTo(accountId);
+            assertThat(account.getBalance()).isEqualTo("1234.56");
+            assertThat(account.getCustomerId()).isEqualTo(customerId);
+            // proto3 has no null: an account that is still open reports "" here, not a missing field.
+            assertThat(account.getClosedAt()).isEmpty();
+
+            ListCustomerAccountsResponse owned = accounts.listCustomerAccounts(
+                    ListCustomerAccountsRequest.newBuilder().setCustomerId(customerId).build());
+            assertThat(owned.getAccountsList()).hasSize(1);
+            assertThat(owned.getAccounts(0).getAccountNumber()).isEqualTo(account.getAccountNumber());
+
+            // The server-streaming RPC: the deposit produced exactly one leg on this account.
+            List<StatementLine> statement = new java.util.ArrayList<>();
+            transactions.streamStatement(
+                            StreamStatementRequest.newBuilder().setAccountId(accountId).build())
+                    .forEachRemaining(statement::add);
+            assertThat(statement).hasSize(1);
+            assertThat(statement.getFirst().getSignedAmount()).isEqualTo("1234.56");
+            assertThat(statement.getFirst().getBalanceAfter()).isEqualTo("1234.56");
+
+            // Auth is genuinely enforced on this surface, not just on REST: no token at all is
+            // rejected before any service method runs.
+            AccountQueryServiceGrpc.AccountQueryServiceBlockingStub anonymous =
+                    AccountQueryServiceGrpc.newBlockingStub(channel);
+            assertThatThrownBy(() -> anonymous.getAccount(
+                    GetAccountRequest.newBuilder().setAccountId(accountId).build()))
+                    .isInstanceOf(StatusRuntimeException.class)
+                    .satisfies(ex -> assertThat(((StatusRuntimeException) ex).getStatus().getCode())
+                            .isEqualTo(Status.Code.UNAUTHENTICATED));
+
+            // A malformed id is INVALID_ARGUMENT, not an opaque UNKNOWN -- the reason
+            // AccountQueryGrpcService checks ownership in code rather than in a SpEL expression.
+            assertThatThrownBy(() -> accounts.getAccount(
+                    GetAccountRequest.newBuilder().setAccountId("not-a-uuid").build()))
+                    .isInstanceOf(StatusRuntimeException.class)
+                    .satisfies(ex -> assertThat(((StatusRuntimeException) ex).getStatus().getCode())
+                            .isEqualTo(Status.Code.INVALID_ARGUMENT));
+
+            // And a genuine miss maps onto NOT_FOUND via GrpcExceptionInterceptor, matching the
+            // REST surface's 404 rather than collapsing to INTERNAL.
+            assertThatThrownBy(() -> accounts.getAccount(
+                    GetAccountRequest.newBuilder().setAccountId(UUID.randomUUID().toString()).build()))
+                    .isInstanceOf(StatusRuntimeException.class)
+                    .satisfies(ex -> assertThat(((StatusRuntimeException) ex).getStatus().getCode())
+                            .isEqualTo(Status.Code.NOT_FOUND));
+        } finally {
+            channel.shutdownNow();
+        }
+    }
+
+    private static ClientInterceptor bearer(String token) {
+        Metadata metadata = new Metadata();
+        metadata.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer " + token);
+        return MetadataUtils.newAttachHeadersInterceptor(metadata);
     }
 }

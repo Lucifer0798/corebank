@@ -63,6 +63,18 @@ server:
     include-message: never
     include-stacktrace: never
 
+spring.grpc:
+  server:
+    # 9091, not 9090: Prometheus already owns 9090 in compose.yaml.
+    port: ${COREBANK_GRPC_PORT:9091}
+    # Reflection lets grpcurl and other tooling discover the service contract at runtime instead
+    # of needing a local copy of corebank.proto -- the gRPC equivalent of the /v3/api-docs the
+    # REST surface already publishes. On by default in Spring gRPC; set explicitly so it is a
+    # visible local-dev decision rather than an inherited one, alongside plaintext (no TLS),
+    # same posture as Keycloak's default passwords and Grafana's anonymous admin.
+    reflection:
+      enabled: true
+
 management:
   endpoints:
     web:

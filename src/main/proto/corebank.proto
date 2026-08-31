@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package corebank.v1;
+
+option java_package = "com.corebank.grpc.proto";
+option java_multiple_files = true;
+option java_outer_classname = "CoreBankProto";
+
+// A deliberately read-only surface. Money movement stays on REST: it needs the
+// `Idempotency-Key` header contract and the RFC 7807 error bodies the HTTP API already
+// defines, and duplicating that here would mean two implementations of the one thing in this
+// system that must never post twice. This is the internal service-to-service read path --
+// balances, statements, transaction lookups -- where gRPC's binary framing and streaming
+// actually buy something over JSON.
+//
+// Every RPC carries the same Keycloak bearer token the REST API takes, in an `authorization`
+// metadata entry; see JwtServerInterceptor. Authorization rules are identical too, because
+// both surfaces route through the same @PreAuthorize expressions on the same beans.
+
+service AccountQueryService {
+  rpc GetAccount(GetAccountRequest) returns (Account);
+  rpc ListCustomerAccounts(ListCustomerAccountsRequest) returns (ListCustomerAccountsResponse);
+}
+
+service TransactionQueryService {
+  rpc GetTransaction(GetTransactionRequest) returns (Transaction);
+
+  // Server-streaming rather than a paged unary call: a statement is unbounded in principle,
+  // and this lets a caller start processing the first lines before the last are read. The
+  // REST endpoint stays paged, since a browser client wants a page count.
+  rpc StreamStatement(StreamStatementRequest) returns (stream StatementLine);
+}
+
+// Amounts are strings, not doubles: every amount in this system is a BigDecimal backed by
+// NUMERIC(19,4), and proto3 has no decimal type. A double would silently reintroduce the
+// binary floating-point error the whole ledger is built to avoid.
+message Account {
+  string id = 1;
+  string account_number = 2;
+  string customer_id = 3;
+  string account_type = 4;
+  string currency = 5;
+  string balance = 6;
+  string available_balance = 7;
+  string overdraft_limit = 8;
+  string status = 9;
+  string opened_at = 10;
+  string closed_at = 11;
+}
+
+message GetAccountRequest {
+  string account_id = 1;
+}
+
+message ListCustomerAccountsRequest {
+  string customer_id = 1;
+}
+
+message ListCustomerAccountsResponse {
+  repeated Account accounts = 1;
+}
+
+message TransactionLeg {
+  string account_id = 1;
+  string account_number = 2;
+  string direction = 3;
+  string amount = 4;
+  string balance_after = 5;
+}
+
+message Transaction {
+  string id = 1;
+  string reference = 2;
+  string type = 3;
+  string status = 4;
+  string amount = 5;
+  string currency = 6;
+  string description = 7;
+  string posted_at = 8;
+  repeated TransactionLeg legs = 9;
+}
+
+message GetTransactionRequest {
+  string reference = 1;
+}
+
+message StreamStatementRequest {
+  string account_id = 1;
+  // Both optional, ISO-8601. Empty means unbounded on that side.
+  string from = 2;
+  string to = 3;
+}
+
+message StatementLine {
+  string entry_id = 1;
+  string reference = 2;
+  string type = 3;
+  string direction = 4;
+  // Negative when the entry reduced this account's balance.
+  string signed_amount = 5;
+  string balance_after = 6;
+  string description = 7;
+  string posted_at = 8;
+}

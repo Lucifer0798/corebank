@@ -35,7 +35,10 @@ spec:
           image: corebank-app:latest
           imagePullPolicy: Never
           ports:
-            - containerPort: 8080
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9091
           envFrom:
             - configMapRef: { name: corebank-app-config }
           env:
@@ -64,4 +67,7 @@ metadata:
 spec:
   selector: { app: app }
   ports:
-    - port: 8080
+    - name: http
+      port: 8080
+    - name: grpc
+      port: 9091

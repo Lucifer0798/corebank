@@ -1,6 +1,13 @@
 # Build stage. Dependencies are resolved in their own layer so that a code-only change
 # does not re-download the world.
-FROM eclipse-temurin:21-jdk-alpine AS build
+#
+# Deliberately NOT Alpine, unlike the runtime stage below: protobuf-maven-plugin downloads
+# prebuilt protoc and protoc-gen-grpc-java binaries from Maven Central, and those are linked
+# against glibc. On a musl-based Alpine image they fail instantly with a bare
+# "protoc returned exit code 1", which is what this build did before this line changed. Only the
+# build stage needs glibc -- the shipped image is still the Alpine JRE, so this costs nothing at
+# runtime.
+FROM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 
 COPY .mvn/ .mvn/
@@ -19,7 +26,7 @@ COPY --from=build /workspace/target/*.jar app.jar
 RUN chown -R corebank:corebank /app
 USER corebank
 
-EXPOSE 8080
+EXPOSE 8080 9091
 
 # Container-aware heap sizing; the JVM reads the cgroup limit rather than the host's memory.
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+UseContainerSupport"

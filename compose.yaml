@@ -162,6 +162,8 @@ services:
       COREBANK_OPENSEARCH_URI: http://opensearch:9200
     ports:
       - "8080:8080"
+      # gRPC. 9091 rather than 9090, which Prometheus already publishes above.
+      - "9091:9091"
 
 volumes:
   postgres-data:
