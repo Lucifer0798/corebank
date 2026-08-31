@@ -137,6 +137,20 @@ pre-funded accounts, authenticating against the real Keycloak realm exactly like
 does. See [k6/money-movement.js](k6/money-movement.js) for the full set of `-e` overrides
 (`VUS`, `DURATION`, `ACCOUNT_POOL_SIZE`, ...). Drop `MSYS_NO_PATHCONV=1` outside Git Bash.
 
+The gRPC read path has its own script. Note the mount is the **repo root**, not `k6/`, because
+the client loads `corebank.proto` from `src/main/proto`:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm -i --network corebank_default -v "${PWD}:/repo" \
+  -e BASE_URL=http://app:8080 -e KEYCLOAK_URL=http://keycloak:8080 -e GRPC_ADDR=app:9091 \
+  grafana/k6 run /repo/k6/grpc-reads.js
+```
+
+Fixtures are seeded over REST so only the read path is measured. Observed p95 is around 15ms
+against ~800ms for REST writes, which is the gap the binary surface exists for. See
+[k6/grpc-reads.js](k6/grpc-reads.js) for why the server-streaming RPC is covered by
+`CoreBankTestcontainersIT` rather than here.
+
 ### Static analysis, locally
 
 ```bash
@@ -376,9 +390,11 @@ post twice would be a liability, not a feature.
 
 Both surfaces are views of one service layer. The gRPC services call the same `AccountService`
 and `TransactionService` beans the controllers do, so caching, ledger rules and ownership checks
-live in one place; `JwtServerInterceptor` authenticates with the very `JwtDecoder` and
-`JwtAuthenticationConverter` beans `SecurityConfig` builds for the HTTP filter chain, so a token
-cannot grant different authorities depending on which port it arrives on.
+live in one place; `GrpcSecurityConfig` authenticates with Spring's own gRPC JWT support, handed
+the very `JwtAuthenticationConverter` bean `SecurityConfig` builds for the HTTP filter chain, so
+a token cannot grant different authorities depending on which port it arrives on. That sharing
+is load-bearing rather than tidy: the framework's default converter ignores Keycloak's nested
+`realm_access.roles`, so a staff token would authenticate and then arrive with no roles at all.
 
 `StreamStatement` is server-streaming rather than paged — a statement is unbounded in principle,
 and a caller can start work on the first lines before the last are read. Amounts cross the wire
@@ -387,6 +403,12 @@ binary floating-point error the ledger is built to avoid. `GrpcExceptionIntercep
 application's own `ApiException` hierarchy onto gRPC statuses and puts the same stable `code` the
 JSON API returns into `corebank-code` trailing metadata, so a gRPC client branches on the same
 tokens an HTTP client does.
+
+Phase 3's observability covers this surface too, without extra wiring: `/actuator/prometheus`
+carries `grpc_server_*` timers and counters labelled by `rpc_service`, `rpc_method` and
+`grpc_status_code`, and each call produces its own Tempo trace named for the RPC (for example
+`corebank.v1.AccountQueryService/GetAccount`) — both confirmed against the running stack rather
+than assumed from the starter's documentation.
 
 ### Observability
 

@@ -332,6 +332,11 @@ for the exact command. **On Windows Git Bash, prefix it with `MSYS_NO_PATHCONV=1
 that, Git Bash rewrites the container path `/scripts` into a Windows host path
 (`C:/Program Files/Git/scripts`) before Docker ever sees it, and k6 fails to find the script.
 
+There are two scripts: `k6/money-movement.js` for the REST write path, and `k6/grpc-reads.js`
+for the gRPC read path. The gRPC one mounts the **repo root** rather than `k6/`, because the k6
+gRPC client has to load `src/main/proto/corebank.proto` at startup — mounting only `k6/` puts
+the proto out of reach and the script fails before the first request.
+
 **REST Assured** is a test-scoped Maven dependency only (`io.rest-assured:rest-assured`) — it's
 the HTTP client `CoreBankTestcontainersIT` drives requests with, not a separate tool to install
 or run.
@@ -458,20 +463,38 @@ own `protoc` and `protoc-gen-grpc-java` binaries — there is no host `protoc` o
 none is needed.
 
 The server listens on **9091** (9090 is Prometheus) with reflection enabled, so tooling can
-discover the contract without a local copy of the `.proto`:
+discover the contract without a local copy of the `.proto`.
+
+**`grpcurl` v1.9.3** is installed here as a standalone binary at
+`C:\Akshay\tools\grpcurl\grpcurl.exe`, on the user `PATH` — the same no-admin-rights pattern as
+PostgreSQL, `kind` and Terraform. Compose publishes 9091 to the host, so it is reachable
+directly:
 
 ```bash
-docker run --rm --network corebank_default fullstorydev/grpcurl -plaintext app:9091 list
+grpcurl -plaintext localhost:9091 list
 ```
 
-`grpcurl` is not installed either — run it from its image, joined to the compose network, for
-the same reason k6 is run that way (see the `--network host` note in section 8). Calls need the
-same bearer token REST does, passed as metadata:
+Calls need the same bearer token REST does, passed as metadata:
 
 ```bash
 grpcurl -plaintext -H "authorization: Bearer $TOKEN" \
   -d '{"account_id":"<uuid>"}' localhost:9091 corebank.v1.AccountQueryService/GetAccount
 ```
+
+Inside a `kind` cluster there is no published host port, so run it against the Service DNS name
+from a throwaway pod instead:
+
+```bash
+kubectl run grpcurl --rm -i --restart=Never -n corebank --image=fullstorydev/grpcurl:latest --quiet -- \
+  -plaintext -H "authorization: Bearer $TOKEN" app:9091 list
+```
+
+**Observability covers this surface with no extra wiring** — worth knowing before anyone goes
+looking for it. `/actuator/prometheus` exposes `grpc_server_*` series labelled by `rpc_service`,
+`rpc_method`, `rpc_type` and `grpc_status_code`, and every call lands in Tempo as its own trace
+named after the RPC. If you go hunting in Tempo, search by trace name — a TraceQL
+`{ name =~ "corebank.v1.*" }` returns nothing, because that matcher is anchored and the dots are
+regex wildcards, which reads exactly like "gRPC isn't traced" when it is.
 
 **The Spring gRPC config prefix is `spring.grpc.server.*`, not `grpc.server.*`.** Getting this
 wrong is silent — the app starts fine and the server comes up, just on the library's default
@@ -622,3 +645,13 @@ unzip -o terraform.zip && rm terraform.zip
 ```
 
 Then add `C:\Akshay\tools\terraform` to the user `PATH` the same way.
+
+`grpcurl`, likewise:
+
+```bash
+mkdir -p /c/Akshay/tools/grpcurl && cd /c/Akshay/tools/grpcurl
+curl -fsSL -o grpcurl.zip https://github.com/fullstorydev/grpcurl/releases/download/v1.9.3/grpcurl_1.9.3_windows_x86_64.zip
+unzip -o grpcurl.zip grpcurl.exe && rm grpcurl.zip
+```
+
+Then add `C:\Akshay\tools\grpcurl` to the user `PATH` the same way.
