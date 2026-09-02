@@ -129,7 +129,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 20s
+      # 20s was not enough once the stack grew: OpenSearch loads a long list of plugins before it
+      # answers, and on a loaded machine it has been observed taking ~90s, which made the whole
+      # `docker compose up` abort with "dependency failed to start" even though it was coming up
+      # fine. The grace period costs nothing when startup is quick.
+      start_period: 120s
 
   app:
     build: .
@@ -165,5 +169,36 @@ services:
       # gRPC. 9091 rather than 9090, which Prometheus already publishes above.
       - "9091:9091"
 
+  insights:
+    build: ./insights
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      # Not app: this service consumes Kafka and only calls CoreBank's REST API when a request
+      # arrives, so it starts fine without it -- the same downstream posture that lets the app
+      # itself start without OpenSearch.
+    environment:
+      # Its own database inside the same Postgres instance, created on first start; see
+      # insights/app/store.py.
+      INSIGHTS_DATABASE_URL: postgresql://corebank:${POSTGRES_PASSWORD:-corebank}@postgres:5432/insights
+      INSIGHTS_DATABASE_BOOTSTRAP_URL: postgresql://corebank:${POSTGRES_PASSWORD:-corebank}@postgres:5432/corebank
+      INSIGHTS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      INSIGHTS_COREBANK_API_URL: http://app:8080
+      # Same issuer/JWKS split as the app: the issuer is string-compared against the token, the
+      # JWKS URL is actually fetched and so must resolve from inside this container.
+      INSIGHTS_OIDC_ISSUER: http://localhost:8081/realms/corebank
+      INSIGHTS_OIDC_JWKS_URL: http://keycloak:8080/realms/corebank/protocol/openid-connect/certs
+    volumes:
+      - insights-model:/var/lib/insights
+    ports:
+      - "8000:8000"
+
 volumes:
   postgres-data:
+  # The trained categoriser and its MLflow run history, kept outside the image so they survive a
+  # rebuild and can be inspected with `mlflow ui`.
+  insights-model:

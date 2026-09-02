@@ -172,6 +172,7 @@ cluster. They are entirely separate databases with separate data.
 | 8082 | Kafka UI |
 | 6379 | Redis |
 | 9200 | OpenSearch |
+| 8000 | Spending insights (Python/FastAPI) |
 | 9091 | The application's gRPC listener (9090 is Prometheus) |
 | 3000 | Grafana |
 | 9090 | Prometheus |
@@ -545,6 +546,57 @@ here runs against the local Docker engine and costs nothing.
   it to `["/bin/sh", "-c"]` on Linux or macOS.
 - **State is gitignored, the lock file is not.** `terraform.tfstate` describes one machine's own
   throwaway cluster; `.terraform.lock.hcl` pins provider versions and belongs in the repo.
+
+---
+
+## 13. Spending insights (Python)
+
+Nothing to install on the host — the service runs from its own image
+(`docker compose up -d insights`), and the Python on this machine is the Windows build that is
+awkward from Git Bash anyway (see the note in section 2). It listens on **8000**, with FastAPI's
+generated docs at <http://localhost:8000/docs>.
+
+```bash
+docker compose build insights
+docker compose up -d insights
+curl http://localhost:8000/health
+```
+
+Its unit tests run inside the same image, so they need no host virtualenv:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm -v "${PWD}/insights:/src" -w /src \
+  corebank-insights:latest sh -c "pip install --quiet pytest && python -m pytest tests/ -q"
+```
+
+**It creates its own `insights` database on first start** rather than relying on a Postgres init
+script. Init scripts only run when the data volume is first created, so anyone carrying a volume
+from an earlier phase — which is everyone — would have had to `docker compose down -v` and lose
+their data. See `insights/app/store.py`.
+
+**The model trains on first start if none exists**, into the `insights-model` volume, so a fresh
+clone needs no separate training step. Expect the first boot to take longer than later ones.
+
+**MLflow 3.15 refuses the filesystem tracking store.** `file:./mlruns` now raises
+`MlflowException: The filesystem tracking backend ... is in maintenance mode` unless
+`MLFLOW_ALLOW_FILE_STORE=true` is set. This service uses SQLite instead, which is what MLflow now
+recommends and still needs no server. To browse the runs:
+
+```bash
+docker compose exec insights mlflow ui --backend-store-uri sqlite:////var/lib/insights/mlflow.db --host 0.0.0.0
+```
+
+**Char-only n-grams are the wrong feature set for transaction descriptions**, which is worth
+knowing before anyone "simplifies" the pipeline. Tried first for typo tolerance, they classified
+`electricity bill payment` as **RENT** — character n-grams see `ent`/`ment` shared between
+*paym-ent* and *r-ent* and weight that above the word "electricity". The pipeline now unions word
+features (weight 1.0) with character features (weight 0.3), so exact terms dominate while typos
+still land.
+
+**The seed set is synthetic and small**, so confidence scores are low in absolute terms — around
+0.18 for a correct nine-class prediction, against 0.11 for a coin flip. The ranking is meaningful;
+the number is not a calibrated probability. Replacing `SEED_EXAMPLES` with a real labelled export
+is the intended upgrade path.
 
 ---
 

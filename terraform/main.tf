@@ -49,6 +49,20 @@ resource "terraform_data" "app_image" {
   }
 }
 
+# Same reasoning as app_image above: k8s/insights.yaml also pins imagePullPolicy: Never, so
+# without this the insights pod sits in ErrImageNeverPull on a freshly created cluster.
+resource "terraform_data" "insights_image" {
+  triggers_replace = [
+    kind_cluster.corebank.id,
+    var.insights_image,
+  ]
+
+  provisioner "local-exec" {
+    command     = "kind load docker-image ${var.insights_image} --name ${kind_cluster.corebank.name}"
+    working_dir = path.root
+  }
+}
+
 # The Keycloak realm ConfigMap, generated from the same keycloak/corebank-realm.json the compose
 # stack mounts. kustomize refuses file references outside its own directory (see the comment in
 # k8s/kustomization.yaml), so this stays an imperative create the same way k8s/deploy.sh does it
@@ -107,16 +121,20 @@ resource "terraform_data" "manifests" {
 resource "terraform_data" "app_rollout" {
   depends_on = [
     terraform_data.app_image,
+    terraform_data.insights_image,
     terraform_data.manifests,
   ]
 
   triggers_replace = [
     terraform_data.manifests.id,
     terraform_data.app_image.id,
+    terraform_data.insights_image.id,
   ]
 
+  # Both deployments, so a failed insights rollout is a failed apply rather than something you
+  # only discover later. Waiting on app first is not significant -- they start in parallel.
   provisioner "local-exec" {
-    command     = "kubectl rollout status deployment/app -n corebank --timeout=${var.rollout_timeout}"
+    command     = "kubectl rollout status deployment/app -n corebank --timeout=${var.rollout_timeout} && kubectl rollout status deployment/insights -n corebank --timeout=${var.rollout_timeout}"
     interpreter = var.shell_interpreter
     working_dir = "${path.root}/.."
   }

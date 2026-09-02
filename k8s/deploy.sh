@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Deploys CoreBank to a local `kind` cluster. Prerequisite: the cluster exists
-# (`kind create cluster --name corebank`) and the app image is built
-# (`docker compose build app`, or `docker build -t corebank-app:latest .`).
+# (`kind create cluster --name corebank`) and both images are built
+# (`docker compose build app insights`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 kind load docker-image corebank-app:latest --name corebank
+kind load docker-image corebank-insights:latest --name corebank
 
 kubectl create namespace corebank --dry-run=client -o yaml | kubectl apply -f -
 

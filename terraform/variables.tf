@@ -16,6 +16,12 @@ variable "app_image" {
   default     = "corebank-app:latest"
 }
 
+variable "insights_image" {
+  description = "Locally built spending-insights image, loaded the same way (k8s/insights.yaml also sets imagePullPolicy: Never). Build it first with `docker compose build insights`."
+  type        = string
+  default     = "corebank-insights:latest"
+}
+
 variable "rollout_timeout" {
   description = "How long to wait for the app Deployment. Generous because a cold start pays for Postgres, Kafka and Keycloak coming up behind the init containers in k8s/app.yaml."
   type        = string

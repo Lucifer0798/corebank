@@ -16,7 +16,8 @@ security scanning (SonarQube, Trivy). Phase 4 adds a real-infrastructure test su
 verified against a local `kind` cluster. Phase 5 adds bank-wide search: OpenSearch, fed by the
 same Kafka events Phase 2 already publishes, behind two new endpoints under `/api/v1/search`.
 Phase 6 adds a gRPC read surface over the same service layer, and moves the local Kubernetes
-deployment from a shell script to Terraform.
+deployment from a shell script to Terraform. Phase 7 adds a Python/FastAPI spending-insights
+tier that categorises transactions off the same Kafka feed, with the model tracked in MLflow.
 
 ---
 
@@ -34,6 +35,7 @@ deployment from a shell script to Terraform.
 | Events | Every posted transaction is published to Kafka once its database transaction commits. |
 | Search | Bank-wide, cross-account transaction and customer search (OpenSearch), fed by the same Kafka events -- not the per-account statement or unfiltered customer list, both Postgres-backed. |
 | gRPC | A read-only service-to-service surface (accounts, transactions, streamed statements) over the same service layer and the same Keycloak tokens as REST. |
+| Spending insights | A separate Python service categorises each posting off the Kafka feed and serves per-customer spending summaries. Read-only: it never writes to the ledger. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
 | Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements. |
 | Observability | Every request traced end to end (OpenTelemetry/Tempo); business and platform metrics in Grafana. |
@@ -51,12 +53,14 @@ docker compose up --build
 ```
 
 Brings up PostgreSQL, Keycloak, Redis, Kafka, Kafka UI, OpenSearch, Prometheus, Tempo, Grafana,
-and the application together. First build takes a few minutes. Once it's up:
+the spending-insights service and the application together. First build takes a few minutes.
+Once it's up:
 
 | | |
 | --- | --- |
 | API | <http://localhost:8080>, Swagger UI at `/swagger-ui.html` |
 | gRPC | `localhost:9091`, plaintext with reflection on — `grpcurl -plaintext localhost:9091 list` |
+| Spending insights | <http://localhost:8000>, OpenAPI docs at `/docs` |
 | Keycloak admin console | <http://localhost:8081> (`admin` / `admin`) |
 | Kafka UI | <http://localhost:8082> — watch `corebank.transactions.posted` fill up as you post transactions |
 | OpenSearch | <http://localhost:9200> — `curl localhost:9200/corebank-transactions/_search` to see the raw documents |
@@ -379,6 +383,32 @@ not retried, so a transient outage leaves a gap in the index rather than catchin
 automatically; and a failed search request comes back as a clean `503 SEARCH_UNAVAILABLE`
 instead of an unhandled `500`.
 
+### Spending insights
+
+A separate Python service ([insights/](insights/)) — the only part of the system not written in
+Java. It consumes the same `corebank.transactions.posted` topic in its own consumer group,
+categorises each posting's description with a scikit-learn model, and stores one row per ledger
+leg in its own database. `GET /api/v1/insights/customers/{id}/summary` then aggregates that into
+spending by category.
+
+**It never writes to CoreBank.** The single call in that direction resolves which account numbers
+a customer holds, and it forwards the caller's own bearer token, so CoreBank applies exactly the
+authorization it always would — a CUSTOMER token that does not own the customer gets CoreBank's
+own 403 and never reaches the aggregate. That lookup exists because the published event carries
+`accountNumber` but no customer id; widening CoreBank's event to suit a downstream consumer would
+have inverted the dependency this phase is built to respect.
+
+Only outgoing legs count as spending, and general-ledger legs are dropped — every deposit has a
+`GL…` contra leg, and counting it would both double-count the transaction and attribute the
+bank's own cash movements to a customer.
+
+The categoriser is trained on a **synthetic, hand-written seed set**
+([insights/app/model.py](insights/app/model.py)), because CoreBank has no real merchant feed. It
+is a genuine TF-IDF + logistic-regression pipeline tracked in MLflow, not a lookup table, but its
+confidence scores are low in absolute terms — with nine classes and a seed set this small, treat
+them as a ranking signal rather than a calibrated probability. Training happens on first start if
+no model exists, so a fresh `docker compose up` needs no separate step.
+
 ### gRPC
 
 A second, **read-only** surface on port `9091`, defined by
@@ -471,6 +501,14 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
 | `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
 
+Served by the separate insights service on port `8000`, not by the Java API:
+
+| Method | Path | Role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/insights/customers/{id}/summary` | owner, staff | Spending by category; optional `since`/`until` |
+| `GET` | `/api/v1/insights/customers/{id}/entries` | owner, staff | The categorised entries behind the summary |
+| `GET` | `/api/v1/insights/categorise` | TELLER, ADMIN | Run the categoriser over an arbitrary `description` |
+
 ### gRPC (port 9091)
 
 Read-only; see [src/main/proto/corebank.proto](src/main/proto/corebank.proto). Same bearer token
@@ -526,6 +564,7 @@ corebank/
 ├── keycloak/corebank-realm.json       Realm, roles, clients and demo users
 ├── observability/                     Prometheus scrape config, Tempo config, Grafana provisioning
 ├── src/test/java/.../testcontainers/  CoreBankTestcontainersIT: real infra, not mocks
+├── insights/                          Python/FastAPI spending-insights service (Kafka + MLflow)
 ├── k6/                                Load test for deposit/withdraw/transfer
 ├── k8s/                               Kubernetes manifests + deploy.sh for a local kind cluster
 ├── terraform/                         Provisions that kind cluster and applies k8s/ to it
@@ -560,6 +599,16 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_GRPC_PORT` | `9091` | gRPC listener; 9091 rather than 9090, which Prometheus owns |
 | `SERVER_PORT` | `8080` | |
 
+The insights service is configured separately, with an `INSIGHTS_` prefix:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `INSIGHTS_DATABASE_URL` | `postgresql://corebank:corebank@localhost:5432/insights` | Its own database; created on first start if absent |
+| `INSIGHTS_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | |
+| `INSIGHTS_COREBANK_API_URL` | `http://localhost:8080` | Only used to resolve a customer's account numbers |
+| `INSIGHTS_OIDC_ISSUER` / `_JWKS_URL` | Keycloak realm | Same split as the backend's issuer/JWK-set pair |
+| `INSIGHTS_MLFLOW_TRACKING_URI` | `sqlite:////var/lib/insights/mlflow.db` | SQLite, not `file:` — see LOCAL_SETUP |
+
 The defaults exist so the project starts on a laptop with no setup. None of them are
 appropriate anywhere else — in particular, `COREBANK_OIDC_ISSUER_URI` and `_JWK_SET_URI` need
 real values pointing at wherever Keycloak actually runs in any environment beyond a laptop.
@@ -568,16 +617,13 @@ real values pointing at wherever Keycloak actually runs in any environment beyon
 
 ## Scope, and what is deliberately not here
 
-Built across Phase 1–6: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
+Built across Phase 1–7: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
 OpenAPI/Swagger · Docker · JUnit · Git · Keycloak/OIDC · Redis · Kafka · React + TypeScript ·
 OpenTelemetry · Prometheus · Grafana · GitHub Actions · CodeQL · Trivy · SonarQube ·
 Testcontainers · REST Assured · k6 · Kubernetes (`kind`, locally) · OpenSearch · gRPC/protobuf ·
-Terraform (local `kind` only).
+Terraform (local `kind` only) · Python · FastAPI · scikit-learn · MLflow.
 
-Not yet, left for later phases by design: AWS (and the cloud half of Terraform), and a
-Python/FastAPI/MLflow data-AI tier. The seams they will attach to already exist — a stateless
-application already proven to run under Kubernetes and already provisioned by Terraform, so a
-cloud cluster is a provider change rather than a rewrite, an append-only ledger already feeding
-Kafka for whatever downstream
-analytics or ML pipeline comes next, and a CI pipeline a cloud deploy step would slot into rather
-than replace.
+Not yet, left for later phases by design: AWS, and the cloud half of Terraform. The seam is
+already there — a stateless application proven under Kubernetes and already provisioned by
+Terraform, so a cloud cluster is a provider change rather than a rewrite, and a CI pipeline a
+deploy step would slot into rather than replace.

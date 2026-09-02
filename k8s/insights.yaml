@@ -1,0 +1,98 @@
+# The spending-insights service. Deliberately *not* gated on the app the way app.yaml gates on
+# Postgres/Kafka/Keycloak: this service consumes Kafka and only calls CoreBank's REST API when a
+# request actually arrives, so it starts perfectly well before the app does. It does wait for
+# Kafka and Postgres, which it needs at startup.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: insights-config
+  namespace: corebank
+data:
+  INSIGHTS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  INSIGHTS_COREBANK_API_URL: http://app:8080
+  # Same issuer/JWKS split as the app: the issuer is only string-compared against the token's
+  # `iss` claim, while the JWKS URL is actually fetched and so must resolve in-cluster.
+  INSIGHTS_OIDC_ISSUER: http://localhost:8081/realms/corebank
+  INSIGHTS_OIDC_JWKS_URL: http://keycloak:8080/realms/corebank/protocol/openid-connect/certs
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: insights-model
+  namespace: corebank
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insights
+  namespace: corebank
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: insights }
+  template:
+    metadata:
+      labels: { app: insights }
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:17-alpine
+          command: ["sh", "-c", "until pg_isready -h postgres -p 5432 -U corebank; do sleep 2; done"]
+        - name: wait-for-kafka
+          image: apache/kafka:4.3.1
+          command: ["sh", "-c", "until /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092; do sleep 2; done"]
+      containers:
+        - name: insights
+          image: corebank-insights:latest
+          # Loaded into the kind node by terraform/deploy.sh rather than pulled; see app.yaml.
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: insights-config }
+          env:
+            # Assembled here rather than in the ConfigMap so the password comes from the Secret
+            # instead of being baked into plain-text config.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: corebank-secrets, key: postgres-password }
+            - name: INSIGHTS_DATABASE_URL
+              value: postgresql://corebank:$(POSTGRES_PASSWORD)@postgres:5432/insights
+            - name: INSIGHTS_DATABASE_BOOTSTRAP_URL
+              value: postgresql://corebank:$(POSTGRES_PASSWORD)@postgres:5432/corebank
+          volumeMounts:
+            - name: model
+              mountPath: /var/lib/insights
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            # The categoriser trains on first start if no model exists yet, so a cold start on a
+            # fresh volume is genuinely slower than a restart against a warm one.
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 90
+            periodSeconds: 15
+      volumes:
+        - name: model
+          persistentVolumeClaim: { claimName: insights-model }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: insights
+  namespace: corebank
+spec:
+  selector: { app: insights }
+  ports:
+    - port: 8000

@@ -52,3 +52,16 @@ crash.log
 # never be committed. `terraform output kubectl_context` is the supported way in; kind already
 # merges the same context into ~/.kube/config.
 terraform/*-config
+
+### Python (insights service) ###
+# Byte-code and test caches, produced whenever the tests run in the container with the source
+# bind-mounted -- they land in the working tree even though the run happens in Docker.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# A local virtualenv, if anyone runs the service outside its image.
+insights/.venv/
+# Trained model and MLflow runs live in a Docker volume, not the repo; these paths only appear
+# if the service is run directly on the host.
+insights/mlruns/
+insights/model/
