@@ -1,16 +1,14 @@
-"""Tests for the two pieces with real logic in them: the categoriser and leg signing.
+"""The categoriser: does it actually learn the seed categories, and does it degrade sensibly.
 
-The API and consumer are covered end to end against real Kafka/Postgres/Keycloak in
-CoreBankTestcontainersIT's counterpart script rather than mocked here -- the same split the Java
-side already makes between unit tests and the real-infrastructure suite.
+Leg signing and the GL filter live in test_consumer.py; the store's SQL lives in test_store.py
+(against a real Postgres); the routes live in test_api.py; token validation lives in
+test_auth.py; the CoreBank HTTP client lives in test_corebank_client.py.
 """
 
 import tempfile
-from decimal import Decimal
 
 import pytest
 
-from app.consumer import _is_customer_account, _signed_amount
 from app.model import UNCATEGORISED, Categoriser
 
 
@@ -18,7 +16,13 @@ from app.model import UNCATEGORISED, Categoriser
 def categoriser() -> Categoriser:
     # Trains into a throwaway directory so the test never depends on, or clobbers, a model the
     # running service is using.
-    with tempfile.TemporaryDirectory() as tmp:
+    #
+    # ignore_cleanup_errors=True: on Windows, MLflow's SQLite backend can still hold mlflow.db
+    # open when the directory is torn down, which turns into a PermissionError from
+    # TemporaryDirectory's own cleanup rather than a real assertion failure. The service itself
+    # only ever runs in the Linux container, where this does not happen; this is purely about
+    # running the suite on a Windows host without a spurious failure.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         # SQLite, matching the service: MLflow 3.15 refuses the `file:` store by default.
         yield Categoriser(model_dir=tmp, tracking_uri=f"sqlite:///{tmp}/mlflow.db")
 
@@ -54,19 +58,3 @@ class TestCategoriser:
     def test_every_seed_category_is_learnable(self, categoriser):
         assert "TRANSFERS" in categoriser.categories
         assert len(categoriser.categories) >= 8
-
-
-class TestLegSigning:
-    def test_credit_increases_a_customer_account(self):
-        # A customer account is a liability of the bank, so money in is a CREDIT -- the same rule
-        # as CoreBank's Account.applyEntry.
-        assert _signed_amount("CREDIT", "500.00", "100100000001") == Decimal("500.00")
-
-    def test_debit_reduces_a_customer_account(self):
-        assert _signed_amount("DEBIT", "500.00", "100100000001") == Decimal("-500.00")
-
-    def test_general_ledger_legs_are_not_customer_spending(self):
-        # Every deposit has a GL contra leg; counting it would double-count the transaction and
-        # attribute the bank's own cash movements to a customer.
-        assert not _is_customer_account("GL0000000001")
-        assert _is_customer_account("100100000001")

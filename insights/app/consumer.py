@@ -21,14 +21,14 @@ from .store import Store
 log = logging.getLogger(__name__)
 
 
-def _signed_amount(direction: str, amount: str, account_number: str) -> Decimal:
+def _signed_amount(direction: str, amount: str) -> Decimal:
     """Signs a leg from the holding account's point of view.
 
     A customer account is a liability of the bank, so a CREDIT increases it -- money in. This is
     the same rule as CoreBank's `Account.applyEntry`, but it is applied here to *customer*
     accounts only: general-ledger accounts (GL...) have the opposite normal balance, and a
-    spending summary over the bank's own cash account is meaningless, so those legs are dropped
-    by the caller rather than mis-signed here.
+    spending summary over the bank's own cash account is meaningless, so `_handle` drops those
+    legs via `_is_customer_account` before this is ever called on one.
     """
     value = Decimal(amount)
     return value if direction == "CREDIT" else -value
@@ -104,7 +104,7 @@ class TransactionConsumer:
                 reference=reference,
                 account_number=account_number,
                 direction=leg["direction"],
-                signed_amount=str(_signed_amount(leg["direction"], str(leg["amount"]), account_number)),
+                signed_amount=str(_signed_amount(leg["direction"], str(leg["amount"]))),
                 currency=currency,
                 description=description,
                 category=category,

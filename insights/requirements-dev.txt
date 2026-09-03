@@ -1,3 +1,8 @@
 -r requirements.txt
 pytest>=8.3
 pytest-asyncio>=0.25
+# Real Postgres for test_store.py, the same "verify against real infrastructure" practice the
+# Java side uses in CoreBankTestcontainersIT -- store.py's SQL (the upsert, the GL exclusion, the
+# create-database-on-missing-catalog path) is exactly the kind of logic a mock would let through
+# wrong.
+testcontainers[postgres]>=4.9
