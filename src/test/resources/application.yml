@@ -20,6 +20,15 @@ spring:
           # are set anyway so the JwtDecoder bean itself can build without a network call.
           issuer-uri: http://localhost:8081/realms/corebank-test
           jwk-set-uri: http://localhost:8081/realms/corebank-test/protocol/openid-connect/certs
+  kafka:
+    producer:
+      # Matches main's application.yml explicitly rather than relying on this being absent and
+      # falling back to some Boot default: OutboxRelay's KafkaTemplate<String,String> needs a
+      # value-serializer configured at all, or the *first send attempt* (not context startup,
+      # since producer factories are lazy) throws ConfigException: Missing required configuration
+      # "value.serializer" -- caught by OutboxRelay's own try/catch, so this suite would not fail
+      # loudly on it, just retry forever and log a warning every tick.
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 corebank:
   ledger:
@@ -35,6 +44,18 @@ corebank:
     # failure, so this only needs to be a syntactically valid URI to satisfy CoreBankProperties'
     # @NotBlank validation at context startup.
     opensearch-uri: http://localhost:9200
+  outbox:
+    batch-size: 50
+    send-timeout: 3s
+    relay-interval: 2s
+    # Off by default in this suite: it deliberately never runs a real Kafka broker, so every
+    # unpublished row a test creates would otherwise retry every tick against an unreachable
+    # localhost:9092 for the rest of the JVM's life, each attempt blocking up to send-timeout --
+    # one test paid 22 seconds for exactly this before it was disabled here. The write path (an
+    # outbox row commits atomically with its transaction) is still fully exercised; only the
+    # "actually reach a broker" half needs a broker, which this suite structurally doesn't have.
+    # CoreBankTestcontainersIT overrides this back to true, since it runs against a real one.
+    relay-enabled: false
 
 spring.grpc:
   server:

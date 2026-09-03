@@ -42,7 +42,10 @@ spring:
     bootstrap-servers: ${COREBANK_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      # String, not JacksonJsonSerializer: every event now goes through the outbox first
+      # (OutboxEventWriter), which already serializes it to JSON when the row is written, so the
+      # only thing OutboxRelay ever sends is a pre-serialized string -- see KafkaProducerConfig.
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
       # max.block.ms is set in KafkaProducerConfig instead of here: the equivalent YAML property
       # did not reliably take effect.
     consumer:
@@ -134,6 +137,17 @@ corebank:
     allowed-origins: ${COREBANK_ALLOWED_ORIGINS:http://localhost:5173}
   search:
     opensearch-uri: ${COREBANK_OPENSEARCH_URI:http://localhost:9200}
+  outbox:
+    # How many unpublished rows OutboxRelay claims (and row-locks) per tick.
+    batch-size: 50
+    # Per-send bound, not per-batch: a worst case of batch-size * send-timeout is the longest a
+    # single relay tick can hold its row locks during a broker outage. Deliberately short --
+    # see CoreBankProperties.Outbox.
+    send-timeout: 3s
+    # How often the relay ticks; read directly by OutboxRelay's @Scheduled annotation rather than
+    # through CoreBankProperties, since Spring only accepts fixedDelayString as a placeholder
+    # expression, not a bound record field.
+    relay-interval: 2s
 
 logging:
   level:

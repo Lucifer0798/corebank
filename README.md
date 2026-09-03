@@ -353,18 +353,35 @@ outage degrades to "no caching," never to a 500.
 
 ### Events
 
-Every posted transaction is published to the `corebank.transactions.posted` Kafka topic once
-its database transaction actually commits — a `@TransactionalEventListener(phase = AFTER_COMMIT)`
-listener does the send, so a transaction that rolls back (an optimistic-lock failure, a
-constraint violation) never reaches Kafka at all. A demo `@KafkaListener` logs what it consumes;
-Phase 5's OpenSearch indexer is the second, real consumer of the same topic — see Search below.
-A customer create or KYC/status change publishes the same way, to `corebank.customers.changed`.
+Every posted transaction ends up on the `corebank.transactions.posted` Kafka topic; a customer
+create or KYC/identity change ends up on `corebank.customers.changed`. A demo `@KafkaListener`
+logs what it consumes; Phase 5's OpenSearch indexer and the Python insights service are the real
+consumers — see Search and Spending insights below.
 
-Publishing is fire-and-forget: the ledger is the single source of truth, this topic is a
-downstream feed of it, and a broker outage should never fail an HTTP request that already
-succeeded and committed. The producer's `max.block.ms` is set to 3 seconds in
-`KafkaProducerConfig` — Kafka's client default is 60 seconds, which would otherwise hold the
-request thread hostage on every posting during a broker outage.
+Getting an event onto Kafka is a two-step, transactional-outbox handoff, not a direct send.
+`TransactionEventPublisher`/`CustomerEventPublisher` listen for the domain event with a plain
+`@EventListener` — not `@TransactionalEventListener(AFTER_COMMIT)` — so `OutboxEventWriter` writes
+an `outbox_event` row in the **same** database transaction as the ledger or customer change it
+describes: both commit together, or an exception rolls both back together. `OutboxRelay`, a
+`@Scheduled` poller (`corebank.outbox.relay-interval`, default 2s), is the only thing that ever
+actually talks to Kafka: it claims a batch of unpublished rows with `SELECT ... FOR UPDATE SKIP
+LOCKED`, sends each one, and leaves a failed send's row unpublished for the next tick to retry.
+
+What this replaced was fire-and-forget straight to Kafka from an `AFTER_COMMIT` listener:
+correct as far as never publishing a rolled-back posting, but if the broker happened to be
+unreachable at the exact moment of that single send attempt, the event was gone permanently —
+silently leaving a hole in the OpenSearch index and the spending-insights projection with no way
+to detect or repair it. The outbox row is a durable, retriable record of "this still needs
+sending," so a broker outage now delays delivery instead of losing the event: nothing is
+acknowledged to Kafka before it is safely on disk in the same transaction as the change itself.
+
+Two ADMIN-only endpoints repair a gap after the fact — a window predating the outbox, or one this
+application's own monitoring missed for some other reason — by re-deriving the event from the
+ledger/customer tables and writing it through the exact same outbox path a live request uses:
+`POST /api/v1/admin/outbox/replay/transactions?since=&until=` and
+`.../replay/customers?since=&until=` (see API below). Both are safe to run more than once over
+the same window, since every downstream consumer already upserts by the event's key rather than
+appending.
 
 ### Search
 
@@ -500,6 +517,8 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
 | `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
 | `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
+| `POST` | `/api/v1/admin/outbox/replay/transactions` | ADMIN | Re-enqueue transaction-posted events for `since`/`until` |
+| `POST` | `/api/v1/admin/outbox/replay/customers` | ADMIN | Re-enqueue customer-changed events for `since`/`until` |
 
 Served by the separate insights service on port `8000`, not by the Java API:
 
@@ -543,6 +562,7 @@ as REST, passed as `authorization` metadata.
 | `OVERDRAFT_NOT_ALLOWED` | 422 | Savings accounts cannot carry an overdraft |
 | `BALANCE_NOT_ZERO` | 422 | An account must be emptied before it is closed |
 | `INTERNAL_ACCOUNT` | 422 | General-ledger accounts are not addressable here |
+| `INVALID_REPLAY_WINDOW` | 422 | An outbox replay's `until` is not after its `since` |
 
 ---
 

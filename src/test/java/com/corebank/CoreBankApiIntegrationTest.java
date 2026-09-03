@@ -458,6 +458,45 @@ class CoreBankApiIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    @Order(26)
+    @DisplayName("only an administrator can trigger an outbox replay")
+    void outboxReplayRequiresAdmin() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/outbox/replay/transactions").with(teller())
+                        .param("since", "2020-01-01T00:00:00Z")
+                        .param("until", "2030-01-01T00:00:00Z"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @Order(27)
+    @DisplayName("an administrator can replay transaction-posted and customer-changed events for a time window")
+    void adminCanReplayOutboxEvents() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/outbox/replay/transactions").with(admin())
+                        .param("since", "2020-01-01T00:00:00Z")
+                        .param("until", "2030-01-01T00:00:00Z"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.eventsEnqueued").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
+
+        mockMvc.perform(post("/api/v1/admin/outbox/replay/customers").with(admin())
+                        .param("since", "2020-01-01T00:00:00Z")
+                        .param("until", "2030-01-01T00:00:00Z"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.eventsEnqueued").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
+    }
+
+    @Test
+    @Order(28)
+    @DisplayName("a replay window where 'until' is not after 'since' is refused")
+    void outboxReplayRejectsAnInvalidWindow() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/outbox/replay/transactions").with(admin())
+                        .param("since", "2026-01-01T00:00:00Z")
+                        .param("until", "2020-01-01T00:00:00Z"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("INVALID_REPLAY_WINDOW"));
+    }
+
     // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web
     // environment (what @AutoConfigureMockMvc drives) does not register the actuator endpoint
     // mapping the way a real embedded servlet container does, so a MockMvc request to any

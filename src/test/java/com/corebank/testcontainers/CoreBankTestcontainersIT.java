@@ -149,13 +149,15 @@ class CoreBankTestcontainersIT {
         registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
 
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
-        // Without this, the producer falls back to Boot's default StringSerializer and throws
-        // SerializationException the moment a real TransactionPostedEvent is published -- a bug
-        // that was invisible until this suite ran a real producer against a real broker for the
-        // first time.
-        registry.add("spring.kafka.producer.value-serializer",
-                () -> "org.springframework.kafka.support.serializer.JacksonJsonSerializer");
-        // No consumer-side deserializer override needed (unlike the producer above): every
+        // No producer value-serializer override needed here (unlike an earlier phase, before the
+        // outbox existed): src/test/resources/application.yml now sets StringSerializer directly,
+        // matching main's own default, because the producer only ever sends pre-serialized JSON
+        // strings written by OutboxEventWriter -- see KafkaProducerConfig. Overriding it to
+        // JacksonJsonSerializer here, as this suite once needed to when the producer sent typed
+        // objects directly, would now be wrong: Jackson would try to re-serialize an already-JSON
+        // String, not encode a POJO.
+        //
+        // No consumer-side deserializer override needed either (same reasoning): every
         // @KafkaListener now names an explicit, per-type containerFactory from
         // KafkaConsumerConfig instead of relying on the shared default consumer config, so
         // there's nothing here left to shadow. Setting spring.kafka.consumer.value-deserializer
@@ -166,6 +168,10 @@ class CoreBankTestcontainersIT {
 
         registry.add("corebank.search.opensearch-uri",
                 () -> "http://" + OPENSEARCH.getHost() + ":" + OPENSEARCH.getMappedPort(9200));
+
+        // The mocked-JWT suite's default (src/test/resources/application.yml) turns OutboxRelay
+        // off entirely, since that suite has no real broker for it to reach. This one does.
+        registry.add("corebank.outbox.relay-enabled", () -> "true");
 
         // A fixed port rather than 0: Spring gRPC exposes no @LocalServerPort equivalent to read
         // a randomly-bound one back from, so the test has to know the number in advance. Well
