@@ -83,8 +83,15 @@ npm run dev
 ```
 
 Opens on <http://localhost:5173>. It talks to Keycloak directly for login (never through the
-backend) and to the API at `localhost:8080`; both need to already be running. See
-[frontend/.env.example](frontend/.env.example) if either is running somewhere else.
+backend), to the Java API at `localhost:8080`, and to the insights service at `localhost:8000`
+for the spending-insights widget and the categoriser tool; all three need to already be running.
+See [frontend/.env.example](frontend/.env.example) if any of them is running somewhere else.
+
+Staff (TELLER/ADMIN) get a **Search** page — bank-wide transaction and customer search, a
+categoriser playground, and a click-through to a transaction's ledger legs. Every customer view
+(staff viewing one customer, or a CUSTOMER role viewing their own accounts) gets a **Spending
+insights** section: category breakdown and recent categorised entries, pulled live from the
+insights service.
 
 ### The backend alone, against a host PostgreSQL
 
@@ -626,6 +633,7 @@ The insights service is configured separately, with an `INSIGHTS_` prefix:
 | `INSIGHTS_DATABASE_URL` | `postgresql://corebank:corebank@localhost:5432/insights` | Its own database; created on first start if absent |
 | `INSIGHTS_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | |
 | `INSIGHTS_COREBANK_API_URL` | `http://localhost:8080` | Only used to resolve a customer's account numbers |
+| `INSIGHTS_ALLOWED_ORIGINS` | `http://localhost:5173` | CORS; the frontend calls this service directly from the browser, so it needs its own grant separate from `COREBANK_ALLOWED_ORIGINS` |
 | `INSIGHTS_OIDC_ISSUER` / `_JWKS_URL` | Keycloak realm | Same split as the backend's issuer/JWK-set pair |
 | `INSIGHTS_MLFLOW_TRACKING_URI` | `sqlite:////var/lib/insights/mlflow.db` | SQLite, not `file:` — see LOCAL_SETUP |
 

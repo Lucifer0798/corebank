@@ -5,10 +5,14 @@ import type {
   Account,
   Balance,
   Customer,
+  CustomerSearchHit,
   KycStatus,
   PagedResponse,
+  SearchResponse,
   StatementLine,
   Transaction,
+  TransactionSearchHit,
+  TransactionType,
 } from "./types";
 
 /** Binds the current access token to every call, so hooks below never touch auth directly. */
@@ -234,5 +238,48 @@ export function useStatement(accountId: string | undefined, page: number) {
         size: 20,
       }),
     enabled: Boolean(accountId),
+  });
+}
+
+export function useTransaction(reference: string | undefined) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["transaction", reference],
+    queryFn: () => api.get<Transaction>(`/transactions/${reference}`),
+    enabled: Boolean(reference),
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Search -- bank-wide, cross-account (OpenSearch-backed). Staff only; see SearchController.
+// ---------------------------------------------------------------------------------------------
+
+export interface TransactionSearchFilters {
+  q?: string;
+  type?: TransactionType;
+  minAmount?: number;
+  maxAmount?: number;
+  from?: string;
+  to?: string;
+}
+
+export function useTransactionSearch(filters: TransactionSearchFilters, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["search", "transactions", filters, page],
+    queryFn: () =>
+      api.get<SearchResponse<TransactionSearchHit>>("/search/transactions", {
+        ...filters,
+        page,
+        size: 20,
+      }),
+  });
+}
+
+export function useCustomerSearch(q: string, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["search", "customers", q, page],
+    queryFn: () => api.get<SearchResponse<CustomerSearchHit>>("/search/customers", { q, page, size: 20 }),
   });
 }

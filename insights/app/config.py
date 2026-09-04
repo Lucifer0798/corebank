@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Used only to resolve which account numbers a customer holds; see corebank.py.
     corebank_api_url: str = "http://localhost:8080"
 
+    # Comma-separated, same convention as CoreBank's own COREBANK_ALLOWED_ORIGINS -- the frontend
+    # calls this service directly from the browser (see SpendingInsights.tsx), on its own origin
+    # and port, so it needs its own CORS grant independent of the Java API's.
+    allowed_origins: str = "http://localhost:5173"
+
     # issuer is compared against the token's `iss` claim as a plain string and never dialled;
     # jwks_url is the one actually fetched. Split for the same reason CoreBank splits them.
     oidc_issuer: str = "http://localhost:8081/realms/corebank"

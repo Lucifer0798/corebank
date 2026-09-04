@@ -92,6 +92,21 @@ def as_customer():
     main.app.dependency_overrides.pop(current_principal, None)
 
 
+class TestCors:
+    def test_allows_the_configured_frontend_origin(self, client, wire_state):
+        # Starlette's CORSMiddleware only adds Access-Control-Allow-Origin to a request that
+        # actually carries an Origin header -- a plain same-process TestClient GET without one
+        # would pass either way, so this has to send it explicitly to prove the grant is real.
+        wire_state()
+        response = client.get("/health", headers={"Origin": "http://localhost:5173"})
+        assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+    def test_refuses_an_origin_not_on_the_allowlist(self, client, wire_state):
+        wire_state()
+        response = client.get("/health", headers={"Origin": "http://evil.example"})
+        assert "access-control-allow-origin" not in response.headers
+
+
 class TestHealth:
     def test_is_unauthenticated_and_reports_categories(self, client, wire_state):
         wire_state(categoriser=_FakeCategoriser(), store=_FakeStore(entries_indexed=342))

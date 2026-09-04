@@ -188,6 +188,7 @@ services:
       INSIGHTS_DATABASE_BOOTSTRAP_URL: postgresql://corebank:${POSTGRES_PASSWORD:-corebank}@postgres:5432/corebank
       INSIGHTS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       INSIGHTS_COREBANK_API_URL: http://app:8080
+      INSIGHTS_ALLOWED_ORIGINS: ${INSIGHTS_ALLOWED_ORIGINS:-http://localhost:5173}
       # Same issuer/JWKS split as the app: the issuer is string-compared against the token, the
       # JWKS URL is actually fetched and so must resolve from inside this container.
       INSIGHTS_OIDC_ISSUER: http://localhost:8081/realms/corebank

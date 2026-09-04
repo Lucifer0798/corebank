@@ -94,3 +94,36 @@ export interface ProblemDetail {
   timestamp: string;
   errors?: Record<string, string>;
 }
+
+// -------------------------------------------------------------------------------------------
+// Search (OpenSearch-backed, bank-wide -- see com.corebank.search.dto)
+// -------------------------------------------------------------------------------------------
+
+/** Not PagedResponse: OpenSearch results never come from a Spring Data Page. */
+export interface SearchResponse<T> {
+  hits: T[];
+  totalHits: number;
+  page: number;
+  size: number;
+}
+
+export interface TransactionSearchHit {
+  reference: string;
+  type: TransactionType;
+  amount: number;
+  currency: string;
+  description: string | null;
+  postedAt: string;
+  accountNumbers: string[];
+}
+
+export interface CustomerSearchHit {
+  id: string;
+  customerNumber: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string | null;
+  kycStatus: KycStatus;
+  status: CustomerStatus;
+}

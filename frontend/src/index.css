@@ -290,3 +290,29 @@ input:focus, select:focus, textarea:focus {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+
+.category-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.category-row__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.88rem;
+  margin-bottom: 0.3rem;
+}
+
+.category-row__track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-neutral-bg);
+  overflow: hidden;
+}
+
+.category-row__fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 999px;
+}

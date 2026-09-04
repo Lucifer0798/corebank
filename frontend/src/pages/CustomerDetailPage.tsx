@@ -9,6 +9,7 @@ import {
   useUpdateKyc,
 } from "../api/hooks";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { SpendingInsights } from "../components/SpendingInsights";
 import { StatusPill } from "../components/StatusPill";
 import { formatAmount } from "../format";
 import { rolesFromAccessToken } from "../auth/roles";
@@ -117,6 +118,8 @@ export function CustomerDetailPage() {
           </tbody>
         </table>
       </div>
+
+      <SpendingInsights customerId={customer.id} />
     </>
   );
 }

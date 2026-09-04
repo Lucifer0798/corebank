@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import Principal, current_principal
 from .config import settings
@@ -65,6 +66,16 @@ app = FastAPI(
     description="Categorised spending derived from CoreBank's transaction feed. Read-only.",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# Every route here is a GET behind a bearer token, never a cookie, so allow_credentials stays
+# false -- same posture as CoreBank's own CorsConfigurationSource in SecurityConfig.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in settings().allowed_origins.split(",")],
+    allow_methods=["GET"],
+    allow_headers=["Authorization"],
+    allow_credentials=False,
 )
 
 

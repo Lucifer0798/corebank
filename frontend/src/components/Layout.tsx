@@ -15,9 +15,14 @@ export function Layout() {
           <span className="app-nav__brand">CoreBank Lite</span>
           <div className="app-nav__links">
             {staff ? (
-              <NavLink to="/customers" className={({ isActive }) => (isActive ? "active" : "")}>
-                Customers
-              </NavLink>
+              <>
+                <NavLink to="/customers" className={({ isActive }) => (isActive ? "active" : "")}>
+                  Customers
+                </NavLink>
+                <NavLink to="/search" className={({ isActive }) => (isActive ? "active" : "")}>
+                  Search
+                </NavLink>
+              </>
             ) : (
               <NavLink to="/my-accounts" className={({ isActive }) => (isActive ? "active" : "")}>
                 My accounts
