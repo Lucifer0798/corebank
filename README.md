@@ -643,6 +643,27 @@ real values pointing at wherever Keycloak actually runs in any environment beyon
 
 ---
 
+## Working on it
+
+`main` is protected: no direct pushes — including from repo admins — and the required CI checks
+(`Backend build and test`, `Frontend build and typecheck`,
+`Spending insights (Python) build and test`, `Docker image build and scan`) must pass on a branch
+that's up to date with `main` before it can merge. CodeQL runs on every change too but is
+deliberately not required — its findings belong in the Security tab, not blocking a merge on a
+scanner's opinion.
+
+```bash
+git checkout -b feat/my-change
+# ... make changes, then:
+git push -u origin feat/my-change
+gh pr create --base main
+```
+
+If you ever genuinely need to bypass this, turn protection off in **Settings → Branches**, do
+what you need, and turn it back on.
+
+---
+
 ## Scope, and what is deliberately not here
 
 Built across Phase 1–7: Java 21 · Spring Boot · Spring Security · Hibernate · PostgreSQL · REST ·
