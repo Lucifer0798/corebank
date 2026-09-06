@@ -404,8 +404,18 @@ never the source of truth for anything, and nothing else in the system depends o
 reachable. Building the client never itself talks to OpenSearch (lazy, like `KafkaTemplate`), so
 an outage at startup doesn't fail the application; a failed index attempt is logged and dropped,
 not retried, so a transient outage leaves a gap in the index rather than catching up
-automatically; and a failed search request comes back as a clean `503 SEARCH_UNAVAILABLE`
+automatically; and a failed search request — a transport failure or a server-side error such as
+querying an index that doesn't exist yet — comes back as a clean `503 SEARCH_UNAVAILABLE`
 instead of an unhandled `500`.
+
+**Losing OpenSearch's data doesn't lose search permanently.** `SearchIndexInitializer` backfills
+an index the instant it creates one, re-deriving every customer and transaction from the ledger
+through the same outbox path the admin replay endpoints use (see Events above) — so "the index
+did not exist yet" is treated as exactly what it is: a fresh start that needs its history rebuilt,
+not a routine restart that should leave existing data alone. Without this, a wiped OpenSearch
+volume, a fresh environment, or an index dropped by hand would leave search silently and
+permanently empty for every record that predates the loss, since nothing else in the application
+ever re-sends an event for something that already exists.
 
 ### Spending insights
 
