@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.opensearch.client.json.JsonData;
 import org.opensearch.client.opensearch.OpenSearchClient;
+import org.opensearch.client.opensearch._types.OpenSearchException;
 import org.opensearch.client.opensearch._types.query_dsl.Query;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +20,14 @@ import org.springframework.stereotype.Service;
  * OpenSearch is a downstream read projection (see {@code TransactionSearchIndexer}), so a failed
  * query here becomes {@link SearchUnavailableException} -- a clean 503 -- rather than an
  * unhandled 500. Nothing else in the application depends on search being reachable.
+ *
+ * <p>Both a transport failure ({@link IOException}, e.g. the broker is unreachable) and a
+ * server-side error the client turns into {@link OpenSearchException} (e.g. querying an index
+ * that does not exist yet -- exactly the state right after {@code SearchIndexInitializer}
+ * creates one and before it is backfilled) are caught here. The client throws the latter as an
+ * unchecked exception, so missing it would have meant one specific, foreseeable OpenSearch
+ * failure mode bypassing this class's whole reason for existing and reaching the caller as a
+ * bare 500 instead.
  */
 @Service
 public class SearchService {
@@ -74,7 +83,7 @@ public class SearchService {
                     s -> s.index(SearchIndices.TRANSACTIONS).query(query).from(page * size).size(size),
                     TransactionSearchHit.class);
             return toSearchResponse(response, page, size);
-        } catch (IOException ex) {
+        } catch (IOException | OpenSearchException ex) {
             throw new SearchUnavailableException(ex);
         }
     }
@@ -91,7 +100,7 @@ public class SearchService {
                     s -> s.index(SearchIndices.CUSTOMERS).query(query).from(page * size).size(size),
                     CustomerSearchHit.class);
             return toSearchResponse(response, page, size);
-        } catch (IOException ex) {
+        } catch (IOException | OpenSearchException ex) {
             throw new SearchUnavailableException(ex);
         }
     }

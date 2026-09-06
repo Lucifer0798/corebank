@@ -7,6 +7,7 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 
 import com.corebank.grpc.proto.AccountQueryServiceGrpc;
+import com.corebank.search.SearchIndexInitializer;
 import com.corebank.grpc.proto.GetAccountRequest;
 import com.corebank.grpc.proto.ListCustomerAccountsRequest;
 import com.corebank.grpc.proto.ListCustomerAccountsResponse;
@@ -33,6 +34,8 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.opensearch.client.opensearch.OpenSearchClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -193,6 +196,12 @@ class CoreBankTestcontainersIT {
 
     @LocalServerPort
     private int port;
+
+    @Autowired
+    private OpenSearchClient openSearchClient;
+
+    @Autowired
+    private SearchIndexInitializer searchIndexInitializer;
 
     private String tellerToken;
     private String adminToken;
@@ -470,6 +479,62 @@ class CoreBankTestcontainersIT {
         } finally {
             channel.shutdownNow();
         }
+    }
+
+    @Test
+    @Order(6)
+    @DisplayName("losing the OpenSearch index does not lose existing customers from search permanently")
+    void searchIndexBackfillsExistingDataAfterIndexLoss() {
+        // A customer that exists in Postgres -- and, via the live Kafka path Order(4) already
+        // proved -- was indexed normally before anything below simulates the index being lost.
+        String uniqueLastName = "Backfill" + UUID.randomUUID().toString().substring(0, 8);
+        given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of(
+                        "firstName", "Search",
+                        "lastName", uniqueLastName,
+                        "email", "tc-backfill-" + UUID.randomUUID() + "@example.com",
+                        "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201);
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", uniqueLastName)
+                        .get("/search/customers")
+                        .then().statusCode(200)
+                        .body("totalHits", equalTo(1)));
+
+        // Simulate the whole index being lost -- a wiped volume, a fresh environment, an index
+        // dropped by hand -- rather than just this one document going missing.
+        try {
+            openSearchClient.indices().delete(d -> d.index("corebank-customers"));
+        } catch (java.io.IOException e) {
+            throw new RuntimeException(e);
+        }
+        // Querying an index that does not exist is a clean 503, not zero hits or a bare 500 --
+        // see SearchService's OpenSearchException handling.
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", uniqueLastName)
+                        .get("/search/customers")
+                        .then().statusCode(503)
+                        .body("code", equalTo("SEARCH_UNAVAILABLE")));
+
+        // The same startup logic that created the index the first time, re-run by hand here
+        // rather than restarting the whole application: it has no way to tell "the index is
+        // gone because the app just booted for the first time" apart from "the index is gone
+        // because a real restart would find it gone too" -- so calling it again is exactly what
+        // a real restart against a wiped OpenSearch volume would do.
+        searchIndexInitializer.ensureIndices();
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", uniqueLastName)
+                        .get("/search/customers")
+                        .then().statusCode(200)
+                        .body("totalHits", equalTo(1))
+                        .body("hits[0].lastName", equalTo(uniqueLastName)));
     }
 
     private static ClientInterceptor bearer(String token) {
