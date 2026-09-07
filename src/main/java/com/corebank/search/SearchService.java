@@ -89,11 +89,22 @@ public class SearchService {
     }
 
     public SearchResponse<CustomerSearchHit> searchCustomers(String q, int page, int size) {
+        // customerNumber is keyword-mapped (see SearchIndexInitializer), so folding it into the
+        // multi_match above with the text fields only ever matched a query that was the *entire*
+        // field value, case-sensitively -- a customer typing part of a number, or lower-casing it,
+        // got zero hits. It gets its own case-insensitive substring match instead, alongside the
+        // free-text match over the name/email fields.
         Query query = (q == null || q.isBlank())
                 ? Query.of(m -> m.matchAll(a -> a))
-                : Query.of(m -> m.multiMatch(mm -> mm
-                        .fields("firstName", "lastName", "email", "customerNumber")
-                        .query(q)));
+                : Query.of(m -> m.bool(b -> b
+                        .should(Query.of(s -> s.multiMatch(mm -> mm
+                                .fields("firstName", "lastName", "email")
+                                .query(q))))
+                        .should(Query.of(s -> s.wildcard(w -> w
+                                .field("customerNumber")
+                                .value("*" + escapeWildcard(q) + "*")
+                                .caseInsensitive(true))))
+                        .minimumShouldMatch("1")));
 
         try {
             org.opensearch.client.opensearch.core.SearchResponse<CustomerSearchHit> response = client.search(
@@ -103,6 +114,11 @@ public class SearchService {
         } catch (IOException | OpenSearchException ex) {
             throw new SearchUnavailableException(ex);
         }
+    }
+
+    /** Escapes wildcard-query metacharacters so a customer number containing them is matched literally. */
+    private static String escapeWildcard(String q) {
+        return q.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?");
     }
 
     private <T> SearchResponse<T> toSearchResponse(org.opensearch.client.opensearch.core.SearchResponse<T> response,
