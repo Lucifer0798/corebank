@@ -537,6 +537,34 @@ class CoreBankTestcontainersIT {
                         .body("hits[0].lastName", equalTo(uniqueLastName)));
     }
 
+    @Test
+    @Order(7)
+    @DisplayName("customer search matches a customer number by substring, regardless of case")
+    void customerSearchMatchesPartialCustomerNumber() {
+        String uniqueLastName = "NumberSearch" + UUID.randomUUID().toString().substring(0, 8);
+        String customerNumber = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of(
+                        "firstName", "Search",
+                        "lastName", uniqueLastName,
+                        "email", "tc-number-" + UUID.randomUUID() + "@example.com",
+                        "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201)
+                .extract().path("customerNumber");
+
+        // A middle slice of the digits, lower-cased: neither the full value nor its original case,
+        // which a keyword-mapped field folded into a plain multi_match would have required.
+        String partialLowercase = customerNumber.substring(2, customerNumber.length() - 2).toLowerCase();
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", partialLowercase)
+                        .get("/search/customers")
+                        .then().statusCode(200)
+                        .body("hits.customerNumber", org.hamcrest.Matchers.hasItem(customerNumber)));
+    }
+
     private static ClientInterceptor bearer(String token) {
         Metadata metadata = new Metadata();
         metadata.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer " + token);
