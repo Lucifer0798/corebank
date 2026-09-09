@@ -1,7 +1,5 @@
 package com.corebank.account.dto;
 
-import com.corebank.account.domain.Account;
-import com.corebank.common.Money;
 import java.math.BigDecimal;
 import java.time.Instant;
 
@@ -13,11 +11,11 @@ public record BalanceResponse(
         BigDecimal availableBalance,
         Instant asOf) {
 
-    public static BalanceResponse from(Account account) {
+    public static BalanceResponse from(AccountResponse account) {
         return new BalanceResponse(
-                account.getAccountNumber(),
-                account.getCurrency(),
-                Money.normalize(account.getBalance()),
+                account.accountNumber(),
+                account.currency(),
+                account.balance(),
                 account.availableBalance(),
                 Instant.now());
     }

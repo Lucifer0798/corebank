@@ -59,7 +59,7 @@ public class AccountController {
     @Operation(summary = "Read the current balance",
             description = "Available balance is the ledger balance plus any agreed overdraft.")
     public BalanceResponse balance(@PathVariable UUID accountId) {
-        return BalanceResponse.from(accountService.require(accountId));
+        return BalanceResponse.from(accountService.get(accountId));
     }
 
     @GetMapping("/customers/{customerId}/accounts")
