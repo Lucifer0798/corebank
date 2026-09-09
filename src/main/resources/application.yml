@@ -7,7 +7,14 @@ spring:
     password: ${COREBANK_DB_PASSWORD:corebank}
     hikari:
       pool-name: corebank-pool
-      maximum-pool-size: 10
+      # Virtual threads (enabled below) let far more concurrent requests reach the service layer
+      # than a platform-thread pool would, and several money-moving paths
+      # (AccountRepository.findByIdForUpdate) hold their connection for as long as they're
+      # waiting on a Postgres row lock rather than releasing it -- a pool this small becomes the
+      # throughput ceiling under load well before anything else does. Overridable per environment,
+      # not hardcoded: the right number depends on that environment's own concurrency and
+      # Postgres's max_connections, not a value to guess once and bake into the jar.
+      maximum-pool-size: ${COREBANK_DB_POOL_SIZE:20}
   jpa:
     open-in-view: false
     hibernate:
