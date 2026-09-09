@@ -626,6 +626,7 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_DB_URL` | `jdbc:postgresql://localhost:5432/corebank` | |
 | `COREBANK_DB_USER` | `corebank` | |
 | `COREBANK_DB_PASSWORD` | `corebank` | |
+| `COREBANK_DB_POOL_SIZE` | `20` | HikariCP `maximum-pool-size`; size to the deployment's own concurrency and Postgres's `max_connections`, not a value to guess once |
 | `COREBANK_OIDC_ISSUER_URI` | `http://localhost:8081/realms/corebank` | Compared against every token's `iss` claim |
 | `COREBANK_OIDC_JWK_SET_URI` | `http://localhost:8081/realms/.../certs` | Where signing keys are actually fetched from |
 | `COREBANK_REDIS_HOST` / `_PORT` | `localhost` / `6379` | |
