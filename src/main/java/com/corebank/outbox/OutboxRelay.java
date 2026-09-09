@@ -4,6 +4,7 @@ import com.corebank.config.CoreBankProperties;
 import com.corebank.outbox.domain.OutboxEvent;
 import com.corebank.outbox.repository.OutboxEventRepository;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,15 +66,22 @@ public class OutboxRelay {
     @Transactional
     public void relay() {
         List<OutboxEvent> batch = repository.lockNextBatch(PageRequest.of(0, properties.batchSize()));
-        for (OutboxEvent event : batch) {
-            deliver(event);
-        }
+        // Fire every send in the batch before waiting on any of them. The producer pipelines
+        // these onto the wire concurrently -- and, with idempotence on (the client default),
+        // still preserves per-partition order even though nothing here waits between sends --
+        // so a broker running at high latency costs roughly one round trip for the whole batch
+        // instead of one full round trip per row, back to back.
+        batch.stream().map(this::send).toList().forEach(this::await);
     }
 
-    private void deliver(OutboxEvent event) {
+    private PendingSend send(OutboxEvent event) {
+        return new PendingSend(event, kafkaTemplate.send(event.getTopic(), event.getEventKey(), event.getPayload()));
+    }
+
+    private void await(PendingSend pending) {
+        OutboxEvent event = pending.event();
         try {
-            kafkaTemplate.send(event.getTopic(), event.getEventKey(), event.getPayload())
-                    .get(properties.sendTimeout().toMillis(), TimeUnit.MILLISECONDS);
+            pending.future().get(properties.sendTimeout().toMillis(), TimeUnit.MILLISECONDS);
             event.markPublished();
             log.debug("Relayed outbox event {} to {}", event.getId(), event.getTopic());
         } catch (ExecutionException | TimeoutException | InterruptedException | RuntimeException ex) {
@@ -84,4 +93,6 @@ public class OutboxRelay {
                     event.getId(), event.getTopic(), event.getAttempts(), ex.toString());
         }
     }
+
+    private record PendingSend(OutboxEvent event, CompletableFuture<SendResult<String, String>> future) {}
 }
