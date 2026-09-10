@@ -3,6 +3,7 @@ package com.corebank.outbox;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,6 +35,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
+import org.springframework.data.domain.SliceImpl;
 
 /**
  * Whether TransactionPostedEvent/CustomerChangedEvent serialize to the exact JSON a live
@@ -59,6 +63,12 @@ class OutboxBackfillServiceTest {
 
     private OutboxBackfillService service() {
         return new OutboxBackfillService(transactionRepository, customerRepository, outbox);
+    }
+
+    /** A single, final page -- {@code hasNext()} false -- since every fixture here is well under
+     *  the service's page size and none of these tests are about pagination itself. */
+    private static <T> Slice<T> onePage(List<T> content) {
+        return new SliceImpl<>(content, Pageable.ofSize(500), false);
     }
 
     private static BankTransaction transaction(String reference) {
@@ -93,7 +103,29 @@ class OutboxBackfillServiceTest {
     void replaysEveryMatchingTransaction() {
         BankTransaction first = transaction("TXN-1");
         BankTransaction second = transaction("TXN-2");
-        when(transactionRepository.findByPostedAtBetween(since, until)).thenReturn(List.of(first, second));
+        when(transactionRepository.findByPostedAtBetween(eq(since), eq(until), any(Pageable.class)))
+                .thenReturn(onePage(List.of(first, second)));
+
+        int count = service().replayTransactions(since, until);
+
+        assertThat(count).isEqualTo(2);
+        verify(outbox).write(eq(OutboxAggregateType.TRANSACTION), eq(TransactionEventPublisher.TOPIC),
+                eq("TXN-1"), any(TransactionPostedEvent.class));
+        verify(outbox).write(eq(OutboxAggregateType.TRANSACTION), eq(TransactionEventPublisher.TOPIC),
+                eq("TXN-2"), any(TransactionPostedEvent.class));
+    }
+
+    @Test
+    @DisplayName("pages through more results than fit in a single page")
+    void pagesThroughMultiplePages() {
+        BankTransaction first = transaction("TXN-1");
+        BankTransaction second = transaction("TXN-2");
+        when(transactionRepository.findByPostedAtBetween(eq(since), eq(until),
+                argThat(p -> p.getPageNumber() == 0)))
+                .thenReturn(new SliceImpl<>(List.of(first), Pageable.ofSize(1), true));
+        when(transactionRepository.findByPostedAtBetween(eq(since), eq(until),
+                argThat(p -> p.getPageNumber() == 1)))
+                .thenReturn(new SliceImpl<>(List.of(second), Pageable.ofSize(1).next(), false));
 
         int count = service().replayTransactions(since, until);
 
@@ -108,7 +140,8 @@ class OutboxBackfillServiceTest {
     @DisplayName("writes one outbox row per matching customer and returns the count")
     void replaysEveryMatchingCustomer() {
         Customer customer = customer();
-        when(customerRepository.findByUpdatedAtBetween(since, until)).thenReturn(List.of(customer));
+        when(customerRepository.findByUpdatedAtBetween(eq(since), eq(until), any(Pageable.class)))
+                .thenReturn(onePage(List.of(customer)));
 
         int count = service().replayCustomers(since, until);
 
@@ -120,7 +153,8 @@ class OutboxBackfillServiceTest {
     @Test
     @DisplayName("an empty window is a no-op, not an error")
     void emptyMatchesAreANoOp() {
-        when(transactionRepository.findByPostedAtBetween(since, until)).thenReturn(List.of());
+        when(transactionRepository.findByPostedAtBetween(eq(since), eq(until), any(Pageable.class)))
+                .thenReturn(onePage(List.of()));
 
         assertThat(service().replayTransactions(since, until)).isZero();
         verifyNoInteractions(outbox);
