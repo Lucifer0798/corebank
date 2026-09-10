@@ -11,7 +11,10 @@ import com.corebank.transaction.messaging.TransactionEventPublisher;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
 import com.corebank.transaction.repository.BankTransactionRepository;
 import java.time.Instant;
-import java.util.List;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +33,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OutboxBackfillService {
 
+    /** Rows fetched per page rather than the whole window at once -- see the repository methods. */
+    private static final int PAGE_SIZE = 500;
+
     private final BankTransactionRepository transactionRepository;
     private final CustomerRepository customerRepository;
     private final OutboxEventWriter outbox;
@@ -44,23 +50,37 @@ public class OutboxBackfillService {
     @Transactional
     public int replayTransactions(Instant since, Instant until) {
         requireValidWindow(since, until);
-        List<BankTransaction> transactions = transactionRepository.findByPostedAtBetween(since, until);
-        for (BankTransaction transaction : transactions) {
-            outbox.write(OutboxAggregateType.TRANSACTION, TransactionEventPublisher.TOPIC,
-                    transaction.getReference(), TransactionPostedEvent.from(transaction));
-        }
-        return transactions.size();
+        int count = 0;
+        Pageable page = PageRequest.of(0, PAGE_SIZE, Sort.by("postedAt").ascending().and(Sort.by("id")));
+        Slice<BankTransaction> slice;
+        do {
+            slice = transactionRepository.findByPostedAtBetween(since, until, page);
+            for (BankTransaction transaction : slice) {
+                outbox.write(OutboxAggregateType.TRANSACTION, TransactionEventPublisher.TOPIC,
+                        transaction.getReference(), TransactionPostedEvent.from(transaction));
+            }
+            count += slice.getNumberOfElements();
+            page = page.next();
+        } while (slice.hasNext());
+        return count;
     }
 
     @Transactional
     public int replayCustomers(Instant since, Instant until) {
         requireValidWindow(since, until);
-        List<Customer> customers = customerRepository.findByUpdatedAtBetween(since, until);
-        for (Customer customer : customers) {
-            outbox.write(OutboxAggregateType.CUSTOMER, CustomerEventPublisher.TOPIC,
-                    customer.getId().toString(), CustomerChangedEvent.from(customer));
-        }
-        return customers.size();
+        int count = 0;
+        Pageable page = PageRequest.of(0, PAGE_SIZE, Sort.by("updatedAt").ascending().and(Sort.by("id")));
+        Slice<Customer> slice;
+        do {
+            slice = customerRepository.findByUpdatedAtBetween(since, until, page);
+            for (Customer customer : slice) {
+                outbox.write(OutboxAggregateType.CUSTOMER, CustomerEventPublisher.TOPIC,
+                        customer.getId().toString(), CustomerChangedEvent.from(customer));
+            }
+            count += slice.getNumberOfElements();
+            page = page.next();
+        } while (slice.hasNext());
+        return count;
     }
 
     private void requireValidWindow(Instant since, Instant until) {
