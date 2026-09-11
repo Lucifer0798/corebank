@@ -2,7 +2,6 @@ package com.corebank.account.repository;
 
 import com.corebank.account.domain.Account;
 import jakarta.persistence.LockModeType;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -17,8 +16,6 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     Optional<Account> findByAccountNumber(String accountNumber);
 
     Page<Account> findByCustomerId(UUID customerId, Pageable pageable);
-
-    List<Account> findByCustomerId(UUID customerId);
 
     boolean existsByAccountNumber(String accountNumber);
 

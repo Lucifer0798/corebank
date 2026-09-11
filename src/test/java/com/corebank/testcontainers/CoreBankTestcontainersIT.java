@@ -437,10 +437,23 @@ class CoreBankTestcontainersIT {
             // proto3 has no null: an account that is still open reports "" here, not a missing field.
             assertThat(account.getClosedAt()).isEmpty();
 
+            // page/size both left unset (proto3 zero value): the server fills in page 0, its
+            // own default size, exactly like an unset REST query param would.
             ListCustomerAccountsResponse owned = accounts.listCustomerAccounts(
                     ListCustomerAccountsRequest.newBuilder().setCustomerId(customerId).build());
             assertThat(owned.getAccountsList()).hasSize(1);
             assertThat(owned.getAccounts(0).getAccountNumber()).isEqualTo(account.getAccountNumber());
+            assertThat(owned.getTotalElements()).isEqualTo(1);
+            assertThat(owned.getPage()).isZero();
+            assertThat(owned.getLast()).isTrue();
+
+            // An explicit, deliberately tiny page size proves paging actually narrows the result
+            // set rather than the field being ignored -- this customer has one account, so
+            // asking for zero of them should come back empty but still report the real total.
+            ListCustomerAccountsResponse emptyPage = accounts.listCustomerAccounts(
+                    ListCustomerAccountsRequest.newBuilder().setCustomerId(customerId).setSize(1).setPage(1).build());
+            assertThat(emptyPage.getAccountsList()).isEmpty();
+            assertThat(emptyPage.getTotalElements()).isEqualTo(1);
 
             // The server-streaming RPC: the deposit produced exactly one leg on this account.
             List<StatementLine> statement = new java.util.ArrayList<>();

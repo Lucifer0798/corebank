@@ -54,10 +54,24 @@ message GetAccountRequest {
 
 message ListCustomerAccountsRequest {
   string customer_id = 1;
+  // Both optional. size <= 0 means "use the server default" (20, capped at 100) -- proto3 gives
+  // an unset int32 the same zero value as an explicit 0, so there's no way to tell those apart,
+  // and 0 is never a page anyone actually wants. Matches the REST endpoint's own bounds.
+  int32 page = 2;
+  int32 size = 3;
 }
 
+// Mirrors PagedResponse, the REST envelope for the same data -- see AccountController's
+// equivalent endpoint. A customer accumulates accounts (including closed ones, which don't
+// count against the open-account limit) for as long as they stay a customer, so this list has
+// no real ceiling either, even though it usually stays small.
 message ListCustomerAccountsResponse {
   repeated Account accounts = 1;
+  int32 page = 2;
+  int32 size = 3;
+  int64 total_elements = 4;
+  int32 total_pages = 5;
+  bool last = 6;
 }
 
 message TransactionLeg {

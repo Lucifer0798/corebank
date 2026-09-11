@@ -2,6 +2,7 @@ package com.corebank.grpc;
 
 import com.corebank.account.dto.AccountResponse;
 import com.corebank.grpc.proto.Account;
+import com.corebank.grpc.proto.ListCustomerAccountsResponse;
 import com.corebank.grpc.proto.StatementLine;
 import com.corebank.grpc.proto.Transaction;
 import com.corebank.grpc.proto.TransactionLeg;
@@ -9,6 +10,7 @@ import com.corebank.transaction.dto.StatementLineResponse;
 import com.corebank.transaction.dto.TransactionResponse;
 import java.math.BigDecimal;
 import java.time.Instant;
+import org.springframework.data.domain.Page;
 
 /**
  * Turns the same DTOs the REST controllers return into their proto equivalents, so both surfaces
@@ -39,6 +41,18 @@ final class ProtoMapper {
                 .setOpenedAt(timestamp(account.openedAt()))
                 .setClosedAt(timestamp(account.closedAt()))
                 .build();
+    }
+
+    /** Mirrors {@code PagedResponse.of}, the REST envelope for the same data. */
+    static ListCustomerAccountsResponse toProto(Page<AccountResponse> accounts) {
+        ListCustomerAccountsResponse.Builder builder = ListCustomerAccountsResponse.newBuilder()
+                .setPage(accounts.getNumber())
+                .setSize(accounts.getSize())
+                .setTotalElements(accounts.getTotalElements())
+                .setTotalPages(accounts.getTotalPages())
+                .setLast(accounts.isLast());
+        accounts.forEach(account -> builder.addAccounts(toProto(account)));
+        return builder.build();
     }
 
     static Transaction toProto(TransactionResponse transaction) {

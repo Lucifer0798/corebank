@@ -9,8 +9,9 @@ import com.corebank.grpc.proto.GetAccountRequest;
 import com.corebank.grpc.proto.ListCustomerAccountsRequest;
 import com.corebank.grpc.proto.ListCustomerAccountsResponse;
 import io.grpc.stub.StreamObserver;
-import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
 import org.springframework.grpc.server.service.GrpcService;
 
 /**
@@ -53,10 +54,10 @@ public class AccountQueryGrpcService extends AccountQueryServiceGrpc.AccountQuer
         UUID customerId = GrpcRequests.uuid(request.getCustomerId(), "customer_id");
         GrpcRequests.require(accountSecurity.canReadCustomer(GrpcRequests.authentication(), customerId));
 
-        List<AccountResponse> accounts = accountService.listForCustomer(customerId);
-        ListCustomerAccountsResponse.Builder response = ListCustomerAccountsResponse.newBuilder();
-        accounts.forEach(account -> response.addAccounts(ProtoMapper.toProto(account)));
-        observer.onNext(response.build());
+        Page<AccountResponse> accounts = accountService.listForCustomer(customerId,
+                GrpcRequests.page(request.getPage(), request.getSize(),
+                        Sort.by(Sort.Direction.ASC, "accountNumber")));
+        observer.onNext(ProtoMapper.toProto(accounts));
         observer.onCompleted();
     }
 }
