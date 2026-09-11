@@ -18,7 +18,6 @@ import com.corebank.customer.domain.Customer;
 import com.corebank.customer.service.CustomerService;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -102,11 +101,6 @@ public class AccountService {
     public Page<AccountResponse> listForCustomer(UUID customerId, Pageable pageable) {
         customerService.require(customerId);
         return accounts.findByCustomerId(customerId, pageable).map(AccountResponse::from);
-    }
-
-    @Transactional(readOnly = true)
-    public List<AccountResponse> listForCustomer(UUID customerId) {
-        return accounts.findByCustomerId(customerId).stream().map(AccountResponse::from).toList();
     }
 
     @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")

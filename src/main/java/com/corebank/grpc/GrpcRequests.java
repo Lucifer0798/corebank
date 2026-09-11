@@ -5,6 +5,9 @@ import io.grpc.StatusRuntimeException;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -15,6 +18,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
  * validated here rather than by bean validation the way the REST DTOs are.
  */
 final class GrpcRequests {
+
+    // Matches AccountController's @RequestParam bounds for the equivalent REST endpoint, so a
+    // caller sees the same page shape on either surface.
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
 
     private GrpcRequests() {
     }
@@ -40,6 +48,13 @@ final class GrpcRequests {
         } catch (DateTimeParseException ex) {
             throw invalidArgument(field + " must be an ISO-8601 instant");
         }
+    }
+
+    /** size &lt;= 0 (proto3's unset value) means "use the server default"; negative pages clamp to 0. */
+    static Pageable page(int page, int size, Sort sort) {
+        int safePage = Math.max(page, 0);
+        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+        return PageRequest.of(safePage, safeSize, sort);
     }
 
     static String required(String value, String field) {
