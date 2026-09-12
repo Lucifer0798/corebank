@@ -90,6 +90,16 @@ public class AccountService {
      * Every path that changes a balance or a status calls {@link #evictCache(UUID)} straight
      * after, so the TTL only ever covers a gap the eviction missed -- it is a safety net, not
      * the primary freshness mechanism.
+     *
+     * <p>Deliberately not {@code sync = true}: that would stop concurrent misses on a hot account
+     * from all reaching Postgres at once, but {@code CacheAspectSupport}'s synchronous path calls
+     * {@code Cache.get(key, valueLoader)} directly, which does not consult this class's
+     * {@link CacheErrorHandler} the way a plain {@code cache.get(key)} lookup does -- confirmed by
+     * this repo's own tests: turning it on made a Redis outage in the mocked-JWT suite surface as
+     * a bare 500 instead of falling through to the database, exactly the failure mode
+     * {@link CacheConfig}'s error handler exists to prevent. Redis staying advisory, never a
+     * source of truth, matters more here than closing a stampede window that a 30s TTL and a
+     * single corebank-app replica already keep narrow.
      */
     @Cacheable(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
     @Transactional(readOnly = true)
