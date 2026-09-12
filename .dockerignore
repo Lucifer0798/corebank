@@ -7,4 +7,16 @@ target/
 README.md
 docs/
 compose.yaml
+compose.sonar.yml
 Dockerfile
+
+# Not touched by this Dockerfile at all -- it only COPYs .mvn/, mvnw, pom.xml and src/ -- but with
+# no context filter, docker build still ships every byte of these to the daemon on every build.
+# frontend/node_modules alone is ~100MB.
+frontend/
+insights/
+k8s/
+terraform/
+keycloak/
+observability/
+k6/
