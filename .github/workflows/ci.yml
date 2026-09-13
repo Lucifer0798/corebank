@@ -108,8 +108,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The default "docker" builder can't use an external cache backend -- type=gha below needs
+      # the "docker-container" driver this sets up instead.
+      - uses: docker/setup-buildx-action@v3
+
+      # GitHub Actions cache, so a layer survives across runs instead of every PR rebuilding both
+      # images from nothing -- most costly here is corebank-app's `mvnw dependency:go-offline`
+      # layer, unchanged and reusable whenever pom.xml hasn't. Scoped per image (both build in
+      # this same matrix) so corebank-app and corebank-insights don't evict each other's cache.
+      # load: true, not push: true, keeps this a local build for Trivy to scan below, same as the
+      # plain `docker build` it replaces -- nothing here is published anywhere.
       - name: Build image
-        run: docker build -t ${{ matrix.image }}:ci ${{ matrix.context }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          tags: ${{ matrix.image }}:ci
+          load: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
       # Reports vulnerabilities without failing the build: most findings at this severity land
       # in base-image OS packages outside this project's control, so treating them as a hard
