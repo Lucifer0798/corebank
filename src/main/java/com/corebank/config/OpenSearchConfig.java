@@ -1,7 +1,10 @@
 package com.corebank.config;
 
 import java.net.URISyntaxException;
+import org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManager;
+import org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManagerBuilder;
 import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.util.Timeout;
 import org.opensearch.client.RestClient;
 import org.opensearch.client.json.jackson.JacksonJsonpMapper;
 import org.opensearch.client.opensearch.OpenSearchClient;
@@ -22,7 +25,23 @@ public class OpenSearchConfig {
 
     @Bean
     public OpenSearchClient openSearchClient(CoreBankProperties properties) throws URISyntaxException {
-        RestClient restClient = RestClient.builder(HttpHost.create(properties.search().opensearchUri())).build();
+        CoreBankProperties.Search search = properties.search();
+        RestClient restClient = RestClient.builder(HttpHost.create(search.opensearchUri()))
+                // Without these, SearchService's synchronous client.search() calls inherit
+                // Apache HttpClient's own defaults: no response timeout at all, and a pool sized
+                // for a handful of callers (10 per route) -- see CoreBankProperties.Search.
+                .setRequestConfigCallback(requestConfig -> requestConfig
+                        .setConnectTimeout(Timeout.ofMilliseconds(search.connectTimeout().toMillis()))
+                        .setResponseTimeout(Timeout.ofMilliseconds(search.socketTimeout().toMillis())))
+                .setHttpClientConfigCallback(httpClientBuilder -> {
+                    PoolingAsyncClientConnectionManager connectionManager = PoolingAsyncClientConnectionManagerBuilder
+                            .create()
+                            .setMaxConnPerRoute(search.maxConnections())
+                            .setMaxConnTotal(search.maxConnections())
+                            .build();
+                    return httpClientBuilder.setConnectionManager(connectionManager);
+                })
+                .build();
         OpenSearchTransport transport = new RestClientTransport(restClient, new JacksonJsonpMapper());
         return new OpenSearchClient(transport);
     }

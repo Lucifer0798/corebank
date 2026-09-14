@@ -44,6 +44,9 @@ corebank:
     # failure, so this only needs to be a syntactically valid URI to satisfy CoreBankProperties'
     # @NotBlank validation at context startup.
     opensearch-uri: http://localhost:9200
+    connect-timeout: 2s
+    socket-timeout: 5s
+    max-connections: 50
   outbox:
     batch-size: 50
     send-timeout: 3s

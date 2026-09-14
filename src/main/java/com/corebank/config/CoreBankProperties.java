@@ -32,7 +32,19 @@ public record CoreBankProperties(
     public record Web(@NotEmpty List<String> allowedOrigins) {
     }
 
-    public record Search(@NotBlank String opensearchUri) {
+    /**
+     * The REST client behind {@code OpenSearchClient} otherwise inherits Apache HttpClient's own
+     * defaults: no request-level timeout at all, and a connection pool sized for a handful of
+     * concurrent callers (10 per route) rather than for however many requests virtual threads let
+     * reach {@code SearchService} at once. A slow OpenSearch node would hang those threads
+     * indefinitely instead of failing into the {@code SearchUnavailableException} path that
+     * already exists for exactly this.
+     */
+    public record Search(
+            @NotBlank String opensearchUri,
+            @NotNull Duration connectTimeout,
+            @NotNull Duration socketTimeout,
+            @Positive int maxConnections) {
     }
 
     /**

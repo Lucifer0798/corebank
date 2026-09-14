@@ -144,6 +144,12 @@ corebank:
     allowed-origins: ${COREBANK_ALLOWED_ORIGINS:http://localhost:5173}
   search:
     opensearch-uri: ${COREBANK_OPENSEARCH_URI:http://localhost:9200}
+    # See CoreBankProperties.Search -- the client's own defaults are an unbounded wait and a
+    # pool sized for a handful of callers, neither of which fits a single-node deployment that
+    # virtual threads can otherwise throw well more than a handful of concurrent requests at.
+    connect-timeout: 2s
+    socket-timeout: 5s
+    max-connections: 50
   outbox:
     # How many unpublished rows OutboxRelay claims (and row-locks) per tick.
     batch-size: 50
