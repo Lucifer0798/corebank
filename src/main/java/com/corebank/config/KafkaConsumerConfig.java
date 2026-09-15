@@ -43,6 +43,25 @@ public class KafkaConsumerConfig {
         return factory;
     }
 
+    /**
+     * A second factory over the same {@link ConsumerFactory}, batch-mode this time, so
+     * {@code TransactionSearchIndexer} can take a whole poll's worth of events as one
+     * {@code List<TransactionPostedEvent>} and send them to OpenSearch as a single Bulk API call.
+     * Not a setting on {@code transactionListenerContainerFactory} above: that one is also used by
+     * {@code TransactionEventLogger}, whose listener method takes a single event, not a list --
+     * {@code setBatchListener} is a container-factory-wide setting, so every listener sharing a
+     * factory gets the same batch/non-batch shape whether its method is ready for it or not.
+     */
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, TransactionPostedEvent> transactionSearchIndexerContainerFactory(
+            ConsumerFactory<String, TransactionPostedEvent> transactionConsumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<String, TransactionPostedEvent> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(transactionConsumerFactory);
+        factory.setBatchListener(true);
+        return factory;
+    }
+
     @Bean
     public ConsumerFactory<String, CustomerChangedEvent> customerConsumerFactory(KafkaProperties kafkaProperties) {
         JsonDeserializer<CustomerChangedEvent> deserializer = new JsonDeserializer<>(CustomerChangedEvent.class);
@@ -75,6 +94,12 @@ public class KafkaConsumerConfig {
         ConcurrentKafkaListenerContainerFactory<String, CustomerChangedEvent> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(customerConsumerFactory);
+        // CustomerSearchIndexer is this factory's only listener (unlike the transaction topic,
+        // which TransactionEventLogger also consumes -- see transactionSearchIndexerContainerFactory
+        // for why that one needed a separate factory), so batch mode can go directly here: takes
+        // a batch (List<CustomerChangedEvent>) so a whole poll's worth of events goes to
+        // OpenSearch as one Bulk API call, not one HTTP round trip each.
+        factory.setBatchListener(true);
         return factory;
     }
 }
