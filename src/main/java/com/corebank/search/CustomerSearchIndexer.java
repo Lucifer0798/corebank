@@ -3,8 +3,11 @@ package com.corebank.search;
 import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.customer.messaging.CustomerEventPublisher;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.opensearch.client.opensearch.OpenSearchClient;
+import org.opensearch.client.opensearch.core.BulkResponse;
+import org.opensearch.client.opensearch.core.bulk.BulkOperation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -13,7 +16,8 @@ import org.springframework.stereotype.Component;
 /**
  * Indexes a customer into OpenSearch on create and on every KYC/status change, keyed by the
  * customer id so a later change overwrites the earlier document rather than creating a second
- * one. See {@code TransactionSearchIndexer} for the same reasoning behind the failure handling
+ * one. See {@code TransactionSearchIndexer} for the same reasoning behind both the batch listener
+ * (one Bulk API call per poll rather than one HTTP round trip per event) and the failure handling
  * here: a failed index attempt is logged and dropped, not retried.
  */
 @Component
@@ -29,21 +33,38 @@ public class CustomerSearchIndexer {
 
     @KafkaListener(topics = CustomerEventPublisher.TOPIC, groupId = "corebank-search-indexer",
             containerFactory = "customerListenerContainerFactory")
-    public void onCustomerChanged(CustomerChangedEvent event) {
-        try {
-            Map<String, Object> document = new LinkedHashMap<>();
-            document.put("id", event.id().toString());
-            document.put("customerNumber", event.customerNumber());
-            document.put("firstName", event.firstName());
-            document.put("lastName", event.lastName());
-            document.put("email", event.email());
-            document.put("phone", event.phone() == null ? "" : event.phone());
-            document.put("kycStatus", event.kycStatus().name());
-            document.put("status", event.status().name());
-            document.put("changedAt", event.changedAt().toString());
-            client.index(i -> i.index(SearchIndices.CUSTOMERS).id(event.id().toString()).document(document));
-        } catch (Exception ex) {
-            log.warn("Could not index customer {} into OpenSearch: {}", event.id(), ex.toString());
+    public void onCustomersChanged(List<CustomerChangedEvent> events) {
+        if (events.isEmpty()) {
+            return;
         }
+        List<BulkOperation> operations = events.stream().map(this::toBulkOperation).toList();
+        try {
+            BulkResponse response = client.bulk(b -> b.operations(operations));
+            if (response.errors()) {
+                response.items().stream()
+                        .filter(item -> item.error() != null)
+                        .forEach(item -> log.warn("Could not index customer {} into OpenSearch: {}",
+                                item.id(), item.error().reason()));
+            }
+        } catch (Exception ex) {
+            log.warn("Could not index a batch of {} customer(s) into OpenSearch: {}", events.size(), ex.toString());
+        }
+    }
+
+    private BulkOperation toBulkOperation(CustomerChangedEvent event) {
+        Map<String, Object> document = new LinkedHashMap<>();
+        document.put("id", event.id().toString());
+        document.put("customerNumber", event.customerNumber());
+        document.put("firstName", event.firstName());
+        document.put("lastName", event.lastName());
+        document.put("email", event.email());
+        document.put("phone", event.phone() == null ? "" : event.phone());
+        document.put("kycStatus", event.kycStatus().name());
+        document.put("status", event.status().name());
+        document.put("changedAt", event.changedAt().toString());
+        return BulkOperation.of(op -> op.index(idx -> idx
+                .index(SearchIndices.CUSTOMERS)
+                .id(event.id().toString())
+                .document(document)));
     }
 }
