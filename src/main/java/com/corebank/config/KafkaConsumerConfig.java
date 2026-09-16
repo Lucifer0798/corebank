@@ -40,6 +40,9 @@ public class KafkaConsumerConfig {
         ConcurrentKafkaListenerContainerFactory<String, TransactionPostedEvent> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(transactionConsumerFactory);
+        // Matches KafkaTopicConfig.PARTITIONS: one consumer thread per partition, so this
+        // listener's own group can actually consume in parallel rather than leaving idle threads.
+        factory.setConcurrency(KafkaTopicConfig.PARTITIONS);
         return factory;
     }
 
@@ -59,6 +62,7 @@ public class KafkaConsumerConfig {
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(transactionConsumerFactory);
         factory.setBatchListener(true);
+        factory.setConcurrency(KafkaTopicConfig.PARTITIONS);
         return factory;
     }
 
@@ -100,6 +104,7 @@ public class KafkaConsumerConfig {
         // a batch (List<CustomerChangedEvent>) so a whole poll's worth of events goes to
         // OpenSearch as one Bulk API call, not one HTTP round trip each.
         factory.setBatchListener(true);
+        factory.setConcurrency(KafkaTopicConfig.PARTITIONS);
         return factory;
     }
 }
