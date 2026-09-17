@@ -11,6 +11,7 @@ import {
   useTransfer,
   useUnfreezeAccount,
   useWithdraw,
+  type AmountInput,
 } from "../api/hooks";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { StatusPill } from "../components/StatusPill";
@@ -139,21 +140,13 @@ function MoneyMovementCard({ accountId }: { accountId: string }) {
 
   function handleDeposit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    deposit.mutate({
-      amount: Number(form.get("amount")),
-      description: String(form.get("description") || "") || undefined,
-    });
+    deposit.mutate(readAmountAndDescription(new FormData(event.currentTarget)));
     event.currentTarget.reset();
   }
 
   function handleWithdraw(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    withdraw.mutate({
-      amount: Number(form.get("amount")),
-      description: String(form.get("description") || "") || undefined,
-    });
+    withdraw.mutate(readAmountAndDescription(new FormData(event.currentTarget)));
     event.currentTarget.reset();
   }
 
@@ -163,8 +156,7 @@ function MoneyMovementCard({ accountId }: { accountId: string }) {
     transfer.mutate({
       sourceAccountId: accountId,
       destinationAccountId: String(form.get("destinationAccountId")),
-      amount: Number(form.get("amount")),
-      description: String(form.get("description") || "") || undefined,
+      ...readAmountAndDescription(form),
     });
     event.currentTarget.reset();
   }
@@ -221,6 +213,15 @@ function MoneyMovementCard({ accountId }: { accountId: string }) {
       )}
     </div>
   );
+}
+
+// Deposit, withdraw and transfer forms all carry the same amount/description pair, read the
+// same way; transfer's handler spreads this in alongside its own two extra fields.
+function readAmountAndDescription(form: FormData): Pick<AmountInput, "amount" | "description"> {
+  return {
+    amount: Number(form.get("amount")),
+    description: String(form.get("description") || "") || undefined,
+  };
 }
 
 function AmountField() {
