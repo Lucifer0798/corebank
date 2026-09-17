@@ -683,7 +683,8 @@ OpenTelemetry · Prometheus · Grafana · GitHub Actions · CodeQL · Trivy · S
 Testcontainers · REST Assured · k6 · Kubernetes (`kind`, locally) · OpenSearch · gRPC/protobuf ·
 Terraform (local `kind` only) · Python · FastAPI · scikit-learn · MLflow.
 
-Not yet, left for later phases by design: AWS, and the cloud half of Terraform. The seam is
-already there — a stateless application proven under Kubernetes and already provisioned by
-Terraform, so a cloud cluster is a provider change rather than a rewrite, and a CI pipeline a
-deploy step would slot into rather than replace.
+Deliberately not here: AWS, and the cloud half of Terraform — this project stops at a local `kind`
+cluster by design, not as a placeholder for a phase still to come. The seam for a cloud provider
+is already there if it's ever needed — a stateless application proven under Kubernetes and already
+provisioned by Terraform, so a cloud cluster would be a provider change rather than a rewrite —
+but it isn't on this project's roadmap.
