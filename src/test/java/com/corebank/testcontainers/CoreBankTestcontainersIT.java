@@ -604,6 +604,53 @@ class CoreBankTestcontainersIT {
                         .body("hits.customerNumber", org.hamcrest.Matchers.hasItem(customerNumber)));
     }
 
+    @Test
+    @Order(8)
+    @DisplayName("linking a customer identity publishes a change event, like every other customer mutation")
+    void linkingIdentityPublishesChangeEvent() {
+        // create() and updateKyc() both publish CustomerChangedEvent; linkIdentity() didn't --
+        // an oversight nothing caught, since nothing in this suite (or CoreBankApiIntegrationTest,
+        // which only checks the REST response shape) ever subscribed to the real topic to look.
+        String customerId = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of(
+                        "firstName", "Identity",
+                        "lastName", "Publish" + UUID.randomUUID().toString().substring(0, 8),
+                        "email", "tc-identity-" + UUID.randomUUID() + "@example.com",
+                        "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201)
+                .extract().path("id");
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("keycloakSubject", UUID.randomUUID().toString()))
+                .patch("/customers/{id}/identity", customerId)
+                .then().statusCode(200)
+                .body("identityLinked", equalTo(true));
+
+        try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<String, String>(Map.of(
+                org.apache.kafka.clients.consumer.ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
+                org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG, "tc-verify-identity-" + UUID.randomUUID(),
+                org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
+                org.apache.kafka.clients.consumer.ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+                "org.apache.kafka.common.serialization.StringDeserializer",
+                org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+                "org.apache.kafka.common.serialization.StringDeserializer"))) {
+            consumer.subscribe(List.of("corebank.customers.changed"));
+            var found = await().atMost(Duration.ofSeconds(15))
+                    .until(() -> {
+                        for (var record : consumer.poll(Duration.ofMillis(500))) {
+                            if (record.key().equals(customerId)) {
+                                return record;
+                            }
+                        }
+                        return null;
+                    }, r -> r != null);
+            assertThat(found.value()).contains(customerId);
+        }
+    }
+
     private static ClientInterceptor bearer(String token) {
         Metadata metadata = new Metadata();
         metadata.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer " + token);
