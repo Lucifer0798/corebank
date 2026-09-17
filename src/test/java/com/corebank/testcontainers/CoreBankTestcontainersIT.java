@@ -9,6 +9,7 @@ import static org.hamcrest.Matchers.equalTo;
 import com.corebank.grpc.proto.AccountQueryServiceGrpc;
 import com.corebank.search.SearchIndexInitializer;
 import com.corebank.grpc.proto.GetAccountRequest;
+import com.corebank.grpc.proto.GetTransactionRequest;
 import com.corebank.grpc.proto.ListCustomerAccountsRequest;
 import com.corebank.grpc.proto.ListCustomerAccountsResponse;
 import com.corebank.grpc.proto.StatementLine;
@@ -205,6 +206,7 @@ class CoreBankTestcontainersIT {
 
     private String tellerToken;
     private String adminToken;
+    private String customerToken;
 
     @BeforeEach
     void setUp() {
@@ -213,6 +215,7 @@ class CoreBankTestcontainersIT {
         if (tellerToken == null) {
             tellerToken = tokenFor("teller1", "Teller#2025");
             adminToken = tokenFor("admin", "ChangeMe#2025!");
+            customerToken = tokenFor("asha", "Customer#2025");
         }
     }
 
@@ -412,12 +415,13 @@ class CoreBankTestcontainersIT {
                 .then().statusCode(201)
                 .extract().path("id");
 
-        given().header("Authorization", "Bearer " + tellerToken)
+        String depositReference = given().header("Authorization", "Bearer " + tellerToken)
                 .header("Idempotency-Key", "tc-grpc-deposit-" + UUID.randomUUID())
                 .contentType(ContentType.JSON)
                 .body(Map.of("amount", 1234.56, "description", "gRPC verification deposit"))
                 .post("/accounts/{id}/deposits", accountId)
-                .then().statusCode(201);
+                .then().statusCode(201)
+                .extract().path("reference");
 
         ManagedChannel channel = ManagedChannelBuilder
                 .forAddress("localhost", GRPC_TEST_PORT)
@@ -489,6 +493,28 @@ class CoreBankTestcontainersIT {
                     .isInstanceOf(StatusRuntimeException.class)
                     .satisfies(ex -> assertThat(((StatusRuntimeException) ex).getStatus().getCode())
                             .isEqualTo(Status.Code.NOT_FOUND));
+
+            // getTransaction is the one RPC in this package gated by @PreAuthorize rather than a
+            // manual AccountSecurity check (see TransactionQueryGrpcService's own javadoc), and
+            // until now nothing exercised it at all -- meaning a future change to how @GrpcService
+            // beans get proxied could have silently disabled this check with nothing here to
+            // notice. Proves both directions: a valid TELLER token succeeds and gets the real
+            // transaction back, and a validly-authenticated but wrongly-roled CUSTOMER token is
+            // rejected, not just an unauthenticated one (already covered above for the sibling
+            // service) -- the thing actually worth proving is that hasAnyRole(...) itself gets
+            // evaluated, not just that some auth is required.
+            com.corebank.grpc.proto.Transaction transaction = transactions.getTransaction(
+                    GetTransactionRequest.newBuilder().setReference(depositReference).build());
+            assertThat(transaction.getReference()).isEqualTo(depositReference);
+            assertThat(transaction.getAmount()).isEqualTo("1234.56");
+
+            TransactionQueryServiceGrpc.TransactionQueryServiceBlockingStub asCustomer =
+                    TransactionQueryServiceGrpc.newBlockingStub(channel).withInterceptors(bearer(customerToken));
+            assertThatThrownBy(() -> asCustomer.getTransaction(
+                    GetTransactionRequest.newBuilder().setReference(depositReference).build()))
+                    .isInstanceOf(StatusRuntimeException.class)
+                    .satisfies(ex -> assertThat(((StatusRuntimeException) ex).getStatus().getCode())
+                            .isEqualTo(Status.Code.PERMISSION_DENIED));
         } finally {
             channel.shutdownNow();
         }
