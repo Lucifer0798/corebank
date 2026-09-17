@@ -6,7 +6,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.opensearch.client.opensearch.OpenSearchClient;
-import org.opensearch.client.opensearch.core.BulkResponse;
 import org.opensearch.client.opensearch.core.bulk.BulkOperation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,17 +37,7 @@ public class CustomerSearchIndexer {
             return;
         }
         List<BulkOperation> operations = events.stream().map(this::toBulkOperation).toList();
-        try {
-            BulkResponse response = client.bulk(b -> b.operations(operations));
-            if (response.errors()) {
-                response.items().stream()
-                        .filter(item -> item.error() != null)
-                        .forEach(item -> log.warn("Could not index customer {} into OpenSearch: {}",
-                                item.id(), item.error().reason()));
-            }
-        } catch (Exception ex) {
-            log.warn("Could not index a batch of {} customer(s) into OpenSearch: {}", events.size(), ex.toString());
-        }
+        BulkIndexer.index(client, log, "customer", operations);
     }
 
     private BulkOperation toBulkOperation(CustomerChangedEvent event) {
