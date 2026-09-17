@@ -106,6 +106,7 @@ public class CustomerService {
                     "This Keycloak identity is already linked to another customer");
         }
         customer.setKeycloakSubject(keycloakSubject);
+        eventPublisher.publishEvent(CustomerChangedEvent.from(customer));
         return CustomerResponse.from(customer);
     }
 
