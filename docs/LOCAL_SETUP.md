@@ -58,7 +58,7 @@ it needed no administrator rights and touched no system settings.
 | Listening on | `localhost:5432` only — not reachable from the network |
 | Superuser | `postgres` / `postgres` |
 | Project role and database | `corebank` / `corebank` |
-| Autostart | Scheduled task `CoreBank PostgreSQL`, at logon |
+| Autostart | **None.** Started by hand — see below for why the scheduled task was removed |
 
 `psql` and the other client tools are on the user `PATH`, so they work in any new terminal.
 
@@ -72,12 +72,16 @@ already defaults to, which is why the default profile needs no overrides at all:
 ### Managing the server
 
 ```bash
-schtasks /Run /TN "CoreBank PostgreSQL"
+C:\Akshay\tools\pgsql\bin\pg_ctl.exe -D "C:\Akshay\tools\pgsql\data" -l "C:\Akshay\tools\pgsql\server.log" -o "-p 5432 -c listen_addresses=localhost" start
 ```
 
 ```bash
 C:\Akshay\tools\pgsql\stop-postgres.cmd
 ```
+
+Started this way the server is attached to the terminal that launched it and goes down with it —
+see the next section. Keep that terminal open, or use Docker instead, which publishes PostgreSQL
+on 5433 and has none of this problem.
 
 Check whether it is up:
 
@@ -85,9 +89,9 @@ Check whether it is up:
 netstat -ano | findstr :5432
 ```
 
-### Why autostart is a scheduled task and not a Startup shortcut
+### Why there is no autostart, and why the scheduled task that used to do it was wrong
 
-This one cost an evening, so it is worth writing down.
+This one cost an evening twice: once to write, and once to find out it had never worked.
 
 The obvious approach — a `.cmd` in the Startup folder calling `pg_ctl start` — *appears* to
 work. The server comes up at logon and then dies a minute or two later with:
@@ -99,17 +103,34 @@ LOG:  received fast shutdown request
 ```
 
 `0xC000013A` is `STATUS_CONTROL_C_EXIT`. `pg_ctl start` leaves `postgres.exe` attached to the
-console that launched it, so when that console window is closed Windows delivers a close event
-to the whole process group and takes the database down with it.
+console that launched it, so when that console goes away Windows delivers a close event to the
+whole process group and takes the database down with it.
 
-A scheduled task runs with no console attached at all, which removes the problem entirely.
-Note that `schtasks /Create /SC ONLOGON` requires administrator rights, but PowerShell's
-`Register-ScheduledTask` in the current user's context does not:
+The fix recorded here was a logon-triggered scheduled task, on the reasoning that a task "runs
+with no console attached at all". **That reasoning was wrong, and the task was removed on
+2026-09-18.** It was registered with `LogonType: InteractiveToken`, which runs the action *inside
+the interactive session* — so the process tree stayed session-attached and the original problem
+was never solved, only made less frequent. `server.log` records it dying the same way on
+17 September twice and again on 18 September, seven seconds after reporting
+`database system is ready to accept connections`.
 
-```bash
-powershell -Command "Get-ScheduledTaskInfo -TaskName 'CoreBank PostgreSQL'"
-```
+**None of that was visible from the task**, which is the part worth remembering.
+`Get-ScheduledTaskInfo` reported `LastTaskResult: 0` on every one of those runs, because
+`pg_ctl start` returns as soon as the server accepts connections and exits 0 — long before the
+session tears it down. The status could not have reported this failure whatever happened, so a
+green result meant nothing at all.
 
+If autostart is wanted again, two things would genuinely work, and neither is free:
+
+* **Register it as a Windows service** (`pg_ctl register`). A service has no session, so this is
+  the real answer — but it needs administrator rights, which is exactly what the
+  standalone-binaries install was chosen to avoid.
+* **A task with "run whether user is logged on or not"** (S4U or stored credentials). That is the
+  configuration the original note *described* but did not use: no interactive session, so no
+  console to lose.
+
+Until one of those is chosen, start it by hand and keep the terminal open — or use Docker, where
+the database is a container and none of this applies.
 ### Talking to the database directly
 
 ```bash
