@@ -25,10 +25,17 @@ import io.grpc.StatusRuntimeException;
 import io.grpc.stub.MetadataUtils;
 import io.restassured.RestAssured;
 import io.restassured.http.ContentType;
+import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Order;
@@ -649,6 +656,81 @@ class CoreBankTestcontainersIT {
                     }, r -> r != null);
             assertThat(found.value()).contains(customerId);
         }
+    }
+
+    @Test
+    @Order(9)
+    @DisplayName("concurrent deposits to the same account don't lose an update")
+    void concurrentDepositsDoNotLoseAnUpdate() throws Exception {
+        // TransactionService's own comment promises accounts are "always loaded with a row lock",
+        // and AccountService.requireForUpdate backs that with a real PESSIMISTIC_WRITE query --
+        // but nothing had ever proven that under real concurrency. If that lock were ever
+        // accidentally weakened (findById swapped in for findByIdForUpdate, say, or the
+        // @Transactional boundary moved), two deposits racing on the same account could each read
+        // the same stale balance and one update would silently vanish -- no exception, no error,
+        // just a wrong final balance and a customer's money gone missing.
+        String customerId = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of(
+                        "firstName", "Concurrency",
+                        "lastName", "Check" + UUID.randomUUID().toString().substring(0, 8),
+                        "email", "tc-concurrency-" + UUID.randomUUID() + "@example.com",
+                        "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201)
+                .extract().path("id");
+
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("kycStatus", "VERIFIED"))
+                .patch("/customers/{id}/kyc", customerId)
+                .then().statusCode(200);
+
+        String accountId = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("customerId", customerId, "accountType", "SAVINGS"))
+                .post("/accounts")
+                .then().statusCode(201)
+                .extract().path("id");
+
+        int concurrentDeposits = 15;
+        BigDecimal amountEach = new BigDecimal("10.00");
+        ExecutorService executor = Executors.newFixedThreadPool(concurrentDeposits);
+        // Every thread counts down as soon as it's running, then blocks on the same gate, so the
+        // main thread only releases them once all are genuinely poised to fire at the same
+        // instant -- the thing that actually stresses a row lock, rather than N requests that
+        // happen to land one after another closely in time.
+        CountDownLatch ready = new CountDownLatch(concurrentDeposits);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Integer>> futures = new ArrayList<>();
+            for (int i = 0; i < concurrentDeposits; i++) {
+                String idempotencyKey = "tc-concurrency-deposit-" + UUID.randomUUID();
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return given().header("Authorization", "Bearer " + tellerToken)
+                            .header("Idempotency-Key", idempotencyKey)
+                            .contentType(ContentType.JSON)
+                            .body(Map.of("amount", amountEach))
+                            .post("/accounts/{id}/deposits", accountId)
+                            .statusCode();
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).as("every thread reached the gate").isTrue();
+            start.countDown();
+            for (Future<Integer> future : futures) {
+                assertThat(future.get(30, TimeUnit.SECONDS)).isEqualTo(201);
+            }
+        } finally {
+            executor.shutdown();
+        }
+
+        BigDecimal expectedBalance = amountEach.multiply(BigDecimal.valueOf(concurrentDeposits));
+        given().header("Authorization", "Bearer " + tellerToken)
+                .get("/accounts/{id}/balance", accountId)
+                .then().statusCode(200)
+                .body("balance", equalTo(expectedBalance.floatValue()));
     }
 
     private static ClientInterceptor bearer(String token) {
