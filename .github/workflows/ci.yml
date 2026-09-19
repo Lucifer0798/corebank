@@ -53,6 +53,10 @@ jobs:
         run: ./mvnw -B sonar:sonar -Dsonar.host.url=https://sonarcloud.io
 
   frontend:
+    # Runs the Vitest suite too, despite what the name says. The name is deliberately left alone:
+    # it is one of the required status checks on main (Settings > Branches), matched by exact
+    # string, so renaming it here would leave that check permanently unsatisfied and block every
+    # merge -- the same trap the Docker matrix job's contexts hit when protection was first set up.
     name: Frontend build and typecheck
     runs-on: ubuntu-latest
     defaults:
@@ -69,6 +73,7 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+      - run: npm test
 
   insights:
     name: Spending insights (Python) build and test
