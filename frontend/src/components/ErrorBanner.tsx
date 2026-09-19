@@ -6,7 +6,10 @@ export function ErrorBanner({ error }: { error: unknown }) {
     return null;
   }
   const message = error instanceof ApiError ? error.problem.detail : (error as Error).message;
-  return <div className="error-banner">{message ?? "Something went wrong."}</div>;
+  // `||`, not `??`: an empty message is as useless to the reader as a missing one, and both a
+  // rejected fetch and a problem document with an empty detail produce exactly that. `??` let
+  // the empty string through and rendered an error banner with no text in it at all.
+  return <div className="error-banner">{message || "Something went wrong."}</div>;
 }
 
 export function fieldErrors(error: unknown): Record<string, string> | undefined {
