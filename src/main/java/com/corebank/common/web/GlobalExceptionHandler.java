@@ -1,6 +1,8 @@
 package com.corebank.common.web;
 
 import com.corebank.common.exception.ApiException;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import java.net.URI;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -51,6 +53,29 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HandlerMethodValidationException.class)
     public ProblemDetail handleInvalidParameters(HandlerMethodValidationException ex) {
         return problem(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", "Request validation failed");
+    }
+
+    /**
+     * The one query parameters actually raise. Every paginated controller is annotated
+     * {@code @Validated}, which routes their {@code @Min}/{@code @Max} parameters through
+     * {@code MethodValidationInterceptor} (AOP) rather than the built-in handler-method path --
+     * so they arrive here as a {@link ConstraintViolationException} and never as the
+     * {@link HandlerMethodValidationException} above. Without this, a {@code page=-1} fell all
+     * the way through to the catch-all and came back as a 500, telling a caller their own bad
+     * parameter was the server's fault.
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ProblemDetail handleConstraintViolation(ConstraintViolationException ex) {
+        Map<String, String> errors = new TreeMap<>();
+        for (ConstraintViolation<?> violation : ex.getConstraintViolations()) {
+            // "list.page" -> "page": the method the parameter belongs to is an implementation
+            // detail, and the caller only ever supplied the last segment.
+            String path = violation.getPropertyPath().toString();
+            errors.putIfAbsent(path.substring(path.lastIndexOf('.') + 1), violation.getMessage());
+        }
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", "Request validation failed");
+        problem.setProperty("errors", errors);
+        return problem;
     }
 
     @ExceptionHandler(MissingRequestHeaderException.class)
