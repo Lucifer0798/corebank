@@ -21,6 +21,7 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Turns every failure into an RFC 7807 problem document so clients get one predictable error shape.
@@ -95,6 +96,23 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleOptimisticLock(OptimisticLockingFailureException ex) {
         return problem(HttpStatus.CONFLICT, "CONCURRENT_MODIFICATION",
                 "The record was modified concurrently; retry the request");
+    }
+
+    /**
+     * A path this API does not serve. Spring hands an unmatched request to the static resource
+     * handler, which raises this rather than anything routing-shaped -- so without a handler it
+     * reached the catch-all below and came back as a 500, logged at ERROR with a stack trace.
+     * Routine scanner and typo traffic reading as the application falling over is both wrong for
+     * the caller and noise for whoever watches the logs.
+     *
+     * <p>Its own code rather than {@code RESOURCE_NOT_FOUND}: a client branching on this needs to
+     * tell "the URL you called does not exist" from "the id you asked for does not exist", and
+     * only the second is worth retrying against a different record. Nothing about the requested
+     * path is echoed back, matching every other handler here.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ProblemDetail handleNoResource(NoResourceFoundException ex) {
+        return problem(HttpStatus.NOT_FOUND, "ENDPOINT_NOT_FOUND", "No endpoint exists at this path");
     }
 
     @ExceptionHandler(AccessDeniedException.class)

@@ -540,6 +540,32 @@ class CoreBankApiIntegrationTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    @Order(30)
+    @DisplayName("a path this API does not serve is a 404, not a 500")
+    void unknownPathIsNotFound() throws Exception {
+        // Spring routes an unmatched path to the static resource handler, which raises
+        // NoResourceFoundException -- previously unhandled, so a mistyped URL came back as a 500
+        // and was logged at ERROR with a stack trace, making routine scanner traffic look like
+        // the application falling over.
+        mockMvc.perform(get("/api/v1/does-not-exist").with(teller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ENDPOINT_NOT_FOUND"));
+
+        // A known collection with an unknown sub-path is the same class of mistake. Note this
+        // relies on customerId from the ordered steps above -- running this method alone leaves
+        // it null, which MockMvc rejects as a malformed URI (a bare 400) long before routing.
+        mockMvc.perform(get("/api/v1/customers/{id}/not-a-thing", customerId).with(teller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ENDPOINT_NOT_FOUND"));
+
+        // Distinct from a resource that legitimately does not exist: a client branching on `code`
+        // needs to tell "your URL is wrong" from "your id is wrong".
+        mockMvc.perform(get("/api/v1/customers/{id}", UUID.randomUUID()).with(teller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+    }
+
     // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web
     // environment (what @AutoConfigureMockMvc drives) does not register the actuator endpoint
     // mapping the way a real embedded servlet container does, so a MockMvc request to any
