@@ -497,6 +497,49 @@ class CoreBankApiIntegrationTest {
                 .andExpect(jsonPath("$.code").value("INVALID_REPLAY_WINDOW"));
     }
 
+    @Test
+    @Order(29)
+    @DisplayName("page and size are bounded, on every paginated endpoint")
+    void paginationParametersAreValidated() throws Exception {
+        // Every VALIDATION_FAILED assertion elsewhere in this class is about a request *body*
+        // (MethodArgumentNotValidException). These constraints live on query parameters instead,
+        // which Spring reports as a HandlerMethodValidationException -- a different exception, a
+        // different handler branch, and until now nothing exercised it. A refactor that dropped
+        // the @Min/@Max annotations would leave `size=100000` happily paging the whole table.
+        mockMvc.perform(get("/api/v1/customers").with(teller()).param("page", "-1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                // Keyed by the parameter the caller actually sent, not the "list.page" path the
+                // validator reports internally.
+                .andExpect(jsonPath("$.errors.page").exists());
+
+        mockMvc.perform(get("/api/v1/customers").with(teller()).param("size", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors.size").exists());
+
+        mockMvc.perform(get("/api/v1/customers").with(teller()).param("size", "101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        // The same bounds are declared on the other two paginated endpoints; a copy-paste that
+        // dropped them from one would otherwise go unnoticed.
+        mockMvc.perform(get("/api/v1/customers/{id}/accounts", customerId).with(teller())
+                        .param("size", "101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        mockMvc.perform(get("/api/v1/accounts/{id}/transactions", savingsId).with(teller())
+                        .param("page", "-1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        // The upper bound itself has to remain usable -- an off-by-one in the other direction
+        // would reject a perfectly legal page size.
+        mockMvc.perform(get("/api/v1/customers").with(teller()).param("size", "100"))
+                .andExpect(status().isOk());
+    }
+
     // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web
     // environment (what @AutoConfigureMockMvc drives) does not register the actuator endpoint
     // mapping the way a real embedded servlet container does, so a MockMvc request to any
