@@ -6,7 +6,7 @@ export type CustomerStatus = "ACTIVE" | "SUSPENDED" | "CLOSED";
 export type AccountType = "SAVINGS" | "CURRENT";
 export type AccountStatus = "ACTIVE" | "FROZEN" | "CLOSED";
 export type EntryDirection = "DEBIT" | "CREDIT";
-export type TransactionType = "DEPOSIT" | "WITHDRAWAL" | "TRANSFER";
+export type TransactionType = "DEPOSIT" | "WITHDRAWAL" | "TRANSFER" | "REVERSAL";
 
 export interface PagedResponse<T> {
   content: T[];
@@ -70,6 +70,8 @@ export interface Transaction {
   currency: string;
   description: string | null;
   postedAt: string;
+  /** Set only on a REVERSAL: the reference of the posting it undoes. */
+  reversalOf: string | null;
   legs: TransactionLeg[];
 }
 

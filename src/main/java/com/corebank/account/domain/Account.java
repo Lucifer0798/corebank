@@ -91,12 +91,33 @@ public class Account extends AuditableEntity {
      * A direction matching the account's normal balance increases it; the opposite decreases it.
      */
     public BigDecimal applyEntry(EntryDirection direction, BigDecimal amount) {
+        return applyEntry(direction, amount, false);
+    }
+
+    /**
+     * As above, but {@code allowOverdraw} lets the leg push a customer account past its agreed
+     * overdraft instead of being refused.
+     *
+     * <p>Only reversals pass true, and the distinction is narrower than it looks. The overdraft
+     * limit exists to stop the bank lending money it never agreed to lend, which is a question
+     * about a <em>new</em> movement. A reversal is not a new movement: it is the withdrawal of a
+     * posting that should never have existed. Refusing one because the customer has since spent
+     * the money would leave the ledger permanently wrong -- the bank's own error made
+     * uncorrectable by the customer's spending -- so the reversal goes through and the resulting
+     * shortfall becomes a debt to collect, which is how a real bank handles it too.
+     *
+     * <p>Note what this does <em>not</em> bypass: {@link #assertPostable()} still applies. A
+     * frozen account is frozen because somebody decided it should be, and working around that
+     * silently is different from correcting the bank's own arithmetic.
+     */
+    public BigDecimal applyEntry(EntryDirection direction, BigDecimal amount, boolean allowOverdraw) {
         BigDecimal signed = direction == normalBalance ? amount : amount.negate();
         BigDecimal updated = Money.normalize(balance.add(signed));
 
         // Internal general-ledger accounts are allowed to run negative -- the bank funds them.
         // Customer accounts may only go as far negative as their agreed overdraft.
-        if (isCustomerAccount() && updated.add(overdraftLimit).compareTo(BigDecimal.ZERO) < 0) {
+        if (!allowOverdraw && isCustomerAccount()
+                && updated.add(overdraftLimit).compareTo(BigDecimal.ZERO) < 0) {
             throw new InsufficientFundsException(accountNumber, availableBalance(), amount);
         }
         this.balance = updated;

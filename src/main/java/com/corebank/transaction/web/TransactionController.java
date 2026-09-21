@@ -3,6 +3,7 @@ package com.corebank.transaction.web;
 import com.corebank.common.web.PagedResponse;
 import com.corebank.idempotency.IdempotencyService;
 import com.corebank.transaction.dto.AmountRequest;
+import com.corebank.transaction.dto.ReversalRequest;
 import com.corebank.transaction.dto.StatementLineResponse;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.dto.TransferRequest;
@@ -98,6 +99,29 @@ public class TransactionController {
         return respond(idempotencyService.execute(
                 "transfer", idempotencyKey, request, TransactionResponse.class,
                 () -> transactionService.transfer(request, idempotencyKey)));
+    }
+
+    @PostMapping("/transactions/{reference}/reversal")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Reverse a posted transaction",
+            description = "Posts a new transaction mirroring every leg of the original and marks the original "
+                    + "REVERSED. Both stay on the statement; nothing is erased. Admin-only: a teller can move "
+                    + "money but cannot unwind a posting. A reversal may take an account past its overdraft "
+                    + "limit, and cannot itself be reversed.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Reversed, or replayed from a previous identical request"),
+            @ApiResponse(responseCode = "404", description = "No transaction with that reference"),
+            @ApiResponse(responseCode = "409", description = "Already reversed, or the key was used with a different body"),
+            @ApiResponse(responseCode = "422", description = "The transaction is itself a reversal, or an account is frozen or closed")
+    })
+    public ResponseEntity<TransactionResponse> reverse(
+            @PathVariable String reference,
+            @RequestHeader(IDEMPOTENCY_HEADER) @NotBlank @Size(max = 80) String idempotencyKey,
+            @Valid @RequestBody ReversalRequest request) {
+
+        return respond(idempotencyService.execute(
+                "reversal:" + reference, idempotencyKey, request, TransactionResponse.class,
+                () -> transactionService.reverse(reference, request, idempotencyKey)));
     }
 
     @GetMapping("/accounts/{accountId}/transactions")
