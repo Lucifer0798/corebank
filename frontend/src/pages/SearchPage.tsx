@@ -75,6 +75,7 @@ function TransactionSearchTab() {
                 <option value="DEPOSIT">Deposit</option>
                 <option value="WITHDRAWAL">Withdrawal</option>
                 <option value="TRANSFER">Transfer</option>
+                <option value="REVERSAL">Reversal</option>
               </select>
             </div>
             <div className="form-row">

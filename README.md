@@ -28,6 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
+| Reversals | An admin can undo a posting. The correction is its own transaction with mirrored legs -- nothing is edited or erased. |
 | Idempotency | Every money-moving `POST` requires an `Idempotency-Key`. Retries never post twice. |
 | Statements | Paginated account history, newest first, signed from that account's point of view. |
 | Security | Keycloak-issued JWTs, three realm roles. Customers can read only their own accounts. |
@@ -272,7 +273,22 @@ So a deposit debits cash and credits the customer. A withdrawal does the reverse
 between two customer accounts never touches cash at all. That single rule — in
 `Account.applyEntry` — is why the arithmetic stays right without special cases per operation.
 
-Ledger entries are append-only. A correction is a new reversing transaction, never an update.
+Ledger entries are append-only, and reversal is what that buys. Undoing a posting does not
+edit it and does not delete it: `POST /api/v1/transactions/{reference}/reversal` writes a new
+transaction whose legs mirror the original's -- same accounts, same amounts, opposite
+directions -- and marks the original `REVERSED`. Both stay on the statement, so the record
+shows the money moving and then moving back, which is what an auditor needs to see.
+
+It also means nothing downstream has to know reversal exists. Search, the spending insights
+service, anything summing signed amounts: they all net out correctly, because the correcting
+legs are ordinary legs.
+
+Two rules are worth stating outright. A reversal **may** push an account past its overdraft
+limit -- that limit exists to stop the bank lending money it never agreed to lend, and a
+correction is not new lending; refusing one because the customer has since spent the money
+would leave the ledger permanently wrong about a movement that should never have happened.
+A reversal is **not** itself reversible: correcting a mistaken reversal means posting the
+original movement again, not stacking a second correction on the first.
 
 ### Idempotency
 
@@ -530,6 +546,7 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/accounts/{id}/deposits` | TELLER, ADMIN | Deposit — needs `Idempotency-Key` |
 | `POST` | `/api/v1/accounts/{id}/withdrawals` | TELLER, ADMIN | Withdraw — needs `Idempotency-Key` |
 | `POST` | `/api/v1/transfers` | TELLER, ADMIN | Transfer — needs `Idempotency-Key` |
+| `POST` | `/api/v1/transactions/{reference}/reversal` | ADMIN | Reverse a posting — needs `Idempotency-Key` and a `reason` |
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
 | `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
@@ -571,6 +588,7 @@ as REST, passed as `authorization` metadata.
 | `CONCURRENT_MODIFICATION` | 409 | Optimistic lock lost; retry |
 | `EMAIL_TAKEN` | 409 | A customer with that email already exists |
 | `IDENTITY_ALREADY_LINKED` | 409 | That Keycloak identity is linked to a different customer |
+| `ALREADY_REVERSED` | 409 | That transaction has already been reversed |
 | `INSUFFICIENT_FUNDS` | 422 | Available balance, including overdraft, is too low |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
@@ -579,6 +597,7 @@ as REST, passed as `authorization` metadata.
 | `OVERDRAFT_NOT_ALLOWED` | 422 | Savings accounts cannot carry an overdraft |
 | `BALANCE_NOT_ZERO` | 422 | An account must be emptied before it is closed |
 | `INTERNAL_ACCOUNT` | 422 | General-ledger accounts are not addressable here |
+| `REVERSAL_NOT_REVERSIBLE` | 422 | A reversal cannot itself be reversed |
 | `INVALID_REPLAY_WINDOW` | 422 | An outbox replay's `until` is not after its `since` |
 
 ---

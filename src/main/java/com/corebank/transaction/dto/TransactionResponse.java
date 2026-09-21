@@ -22,6 +22,11 @@ public record TransactionResponse(
         String currency,
         String description,
         Instant postedAt,
+
+        @Schema(description = "On a REVERSAL, the reference of the posting it undoes; null otherwise",
+                example = "TXN-20250417-9F3A2B1C")
+        String reversalOf,
+
         List<Leg> legs) {
 
     @Schema(description = "One side of the double-entry posting")
@@ -52,6 +57,7 @@ public record TransactionResponse(
                 transaction.getCurrency(),
                 transaction.getDescription(),
                 transaction.getPostedAt(),
+                transaction.getReversalOf() == null ? null : transaction.getReversalOf().getReference(),
                 transaction.getEntries().stream().map(Leg::from).toList());
     }
 }

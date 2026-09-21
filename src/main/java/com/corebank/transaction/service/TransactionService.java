@@ -10,6 +10,7 @@ import com.corebank.transaction.domain.BankTransaction;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.domain.TransactionType;
 import com.corebank.transaction.dto.AmountRequest;
+import com.corebank.transaction.dto.ReversalRequest;
 import com.corebank.transaction.dto.StatementLineResponse;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.dto.TransferRequest;
@@ -123,6 +124,44 @@ public class TransactionService {
         transaction.addEntry(destination, EntryDirection.CREDIT, amount);
 
         return post(transaction);
+    }
+
+    /**
+     * Undoes a posting by mirroring every leg it produced, as a new transaction of its own.
+     *
+     * <p>Nothing about the original is rewritten except its status: the ledger is append-only, so
+     * a statement covering both postings shows the money moving and then moving back, which is
+     * the honest record. It also means every downstream consumer of the ledger -- search, the
+     * spending insights service, anything summing signed amounts -- nets out correctly with no
+     * awareness that reversal exists, because the correcting legs are ordinary legs.
+     *
+     * <p>Both accounts of a transfer are locked in the same order {@link #transfer} uses, so a
+     * reversal and a live transfer over the same pair queue behind one another instead of
+     * deadlocking.
+     */
+    @Transactional
+    public TransactionResponse reverse(String reference, ReversalRequest request, String idempotencyKey) {
+        BankTransaction original = transactions.findByReference(reference)
+                .orElseThrow(() -> new ResourceNotFoundException("Transaction", reference));
+        original.assertReversible();
+
+        original.getEntries().stream()
+                .map(entry -> entry.getAccount().getId())
+                .distinct()
+                .sorted(Comparator.comparing(UUID::toString))
+                .forEach(accountService::requireForUpdate);
+
+        // A closed or frozen account still refuses the posting. Only the overdraft limit gives
+        // way for a reversal -- see Account.applyEntry(..., allowOverdraw).
+        original.getEntries().forEach(entry -> entry.getAccount().assertPostable());
+
+        BankTransaction reversal = newTransaction(TransactionType.REVERSAL, original.getAmount(),
+                original.getCurrency(), request.reason(), idempotencyKey);
+        reversal.setReversalOf(original);
+        original.getEntries().forEach(reversal::addReversingEntry);
+        original.markReversed();
+
+        return post(reversal);
     }
 
     @Transactional(readOnly = true)
