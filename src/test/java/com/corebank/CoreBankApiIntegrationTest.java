@@ -566,6 +566,120 @@ class CoreBankApiIntegrationTest {
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
+    @Test
+    @Order(31)
+    @DisplayName("an admin can reverse a posting, and the ledger tells the whole story afterwards")
+    void postingsCanBeReversed() throws Exception {
+        // Posted as a teller, reversed as an admin: moving money and unwinding a movement are
+        // deliberately different privileges.
+        String posted = mockMvc.perform(post("/api/v1/accounts/{id}/deposits", savingsId).with(teller())
+                        .header("Idempotency-Key", "it-reversible-deposit")
+                        .contentType(JSON).content("""
+                        {"amount":777.00,"currency":"INR","description":"Keyed twice by branch 004"}"""))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String reference = JsonPath.read(posted, "$.reference");
+        double balanceAfterDeposit = ((Number) JsonPath.read(posted, "$.legs[1].balanceAfter")).doubleValue();
+
+        mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", reference).with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"reason":"Tellers do not get to unwind postings"}"""))
+                .andExpect(status().isForbidden());
+
+        // The correction is its own transaction, with its own reference, mirroring both legs.
+        mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", reference).with(admin())
+                        .header("Idempotency-Key", "it-reversal-1")
+                        .contentType(JSON).content("""
+                        {"reason":"Duplicate counter deposit keyed twice by branch 004"}"""))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotency-Replayed", "false"))
+                .andExpect(jsonPath("$.type").value("REVERSAL"))
+                .andExpect(jsonPath("$.reversalOf").value(reference))
+                .andExpect(jsonPath("$.amount").value(777.00))
+                .andExpect(jsonPath("$.legs[0].accountNumber").value("GL0000000001"))
+                .andExpect(jsonPath("$.legs[0].direction").value("CREDIT"))
+                .andExpect(jsonPath("$.legs[1].direction").value("DEBIT"))
+                .andExpect(jsonPath("$.legs[1].balanceAfter").value(balanceAfterDeposit - 777.00));
+
+        // The original is marked, not erased.
+        mockMvc.perform(get("/api/v1/transactions/{reference}", reference).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REVERSED"))
+                .andExpect(jsonPath("$.type").value("DEPOSIT"));
+
+        // Replaying the key returns the same correction rather than unwinding a second time.
+        mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", reference).with(admin())
+                        .header("Idempotency-Key", "it-reversal-1")
+                        .contentType(JSON).content("""
+                        {"reason":"Duplicate counter deposit keyed twice by branch 004"}"""))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotency-Replayed", "true"));
+
+        // A genuinely new request to reverse it again is a conflict: it was reversible a moment
+        // ago and is not any more.
+        mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", reference).with(admin())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"reason":"Second attempt"}"""))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ALREADY_REVERSED"));
+
+        // Both postings sit on the statement, newest first, and net to nothing.
+        mockMvc.perform(get("/api/v1/accounts/{id}/transactions", savingsId).with(teller())
+                        .param("size", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].type").value("REVERSAL"))
+                .andExpect(jsonPath("$.content[0].signedAmount").value(-777.00))
+                .andExpect(jsonPath("$.content[1].type").value("DEPOSIT"))
+                .andExpect(jsonPath("$.content[1].signedAmount").value(777.00));
+    }
+
+    @Test
+    @Order(32)
+    @DisplayName("a reversal cannot itself be reversed, and always needs a reason")
+    void reversalsAreTerminalAndRequireAReason() throws Exception {
+        String posted = mockMvc.perform(post("/api/v1/accounts/{id}/deposits", savingsId).with(teller())
+                        .header("Idempotency-Key", "it-terminal-deposit")
+                        .contentType(JSON).content("""
+                        {"amount":40.00,"currency":"INR","description":"Another mistake"}"""))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String reference = JsonPath.read(posted, "$.reference");
+
+        // A reason is what makes a reversal auditable, so an empty one is refused outright.
+        mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", reference).with(admin())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"reason":"   "}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        String reversal = mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", reference).with(admin())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"reason":"Posted against the wrong account"}"""))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String reversalReference = JsonPath.read(reversal, "$.reference");
+
+        // Correcting a mistaken reversal means posting the original movement again, not stacking
+        // a second correction on top of the first.
+        mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", reversalReference).with(admin())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"reason":"Undo the undo"}"""))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("REVERSAL_NOT_REVERSIBLE"));
+
+        mockMvc.perform(post("/api/v1/transactions/{reference}/reversal", "TXN-does-not-exist").with(admin())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"reason":"Nothing to undo"}"""))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+    }
+
     // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web
     // environment (what @AutoConfigureMockMvc drives) does not register the actuator endpoint
     // mapping the way a real embedded servlet container does, so a MockMvc request to any
