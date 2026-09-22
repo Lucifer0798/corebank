@@ -1,10 +1,29 @@
-fastapi>=0.115
-uvicorn[standard]>=0.34
-pydantic-settings>=2.7
-aiokafka>=0.12
-asyncpg>=0.30
-httpx>=0.28
-PyJWT[crypto]>=2.10
-scikit-learn>=1.6
-joblib>=1.4
-mlflow>=2.20
+# What this service depends on, and why each bound is where it is.
+#
+# These are the DECLARED dependencies -- the human-edited list. They are not what gets installed:
+# the Dockerfile and CI both install from requirements.lock, which pins every package, including
+# transitive ones, to an exact version. See the header of that file for how to regenerate it.
+#
+# Every entry carries an upper bound. Before, they were floors only (`mlflow>=2.20`), which meant
+# each image build resolved afresh against whatever PyPI happened to be serving -- so the shipped
+# image had already drifted a whole major version past what these pins were written against
+# (mlflow 2.x -> 3.16) without a single line of this file changing. A floor says "at least this
+# much API"; only a ceiling says "and nothing that has since renamed it".
+#
+# The floors are the versions actually in use, not the historical ones. A floor nobody has run in
+# a year is a claim the test suite has never checked.
+
+fastapi>=0.141,<1.0
+uvicorn[standard]>=0.53,<1.0
+pydantic-settings>=2.15,<3
+aiokafka>=0.14,<1.0
+asyncpg>=0.31,<1.0
+httpx>=0.28,<1.0
+PyJWT[crypto]>=2.14,<3
+
+# The model side. scikit-learn's pickle format is tied to the version that wrote it, so a major
+# bump here can silently invalidate a trained model sitting in the mounted volume rather than
+# fail loudly at build time -- which is the sharpest reason in this file for a ceiling.
+scikit-learn>=1.9,<2
+joblib>=1.6,<2
+mlflow>=3.16,<4

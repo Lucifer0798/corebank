@@ -88,9 +88,20 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: insights/requirements-dev.txt
+          cache-dependency-path: insights/requirements-dev.lock
 
-      - run: pip install -r requirements-dev.txt
+      # The lock, not requirements-dev.txt, so the suite runs against the same pinned set the
+      # image ships with -- otherwise CI could go green on versions that never reach production.
+      - run: pip install -r requirements-dev.lock
+
+      # Because the lock is what gets installed, it can drift away from the bounds in
+      # requirements*.txt and nothing would notice -- the declared file would quietly become
+      # decorative. Resolving the declared requirements WITH the lock as a constraint set fails
+      # if any pin falls outside its declared range, and names the package that did it.
+      - name: Lock agrees with the declared bounds
+        run: |
+          pip install --dry-run --quiet --constraint requirements.lock -r requirements.txt
+          pip install --dry-run --quiet --constraint requirements-dev.lock -r requirements-dev.txt
 
       # test_store.py spins up a real Postgres via testcontainers-python -- the same
       # "verify against real infrastructure" practice as the Java Testcontainers step above.

@@ -452,6 +452,18 @@ Only outgoing legs count as spending, and general-ledger legs are dropped — ev
 `GL…` contra leg, and counting it would both double-count the transaction and attribute the
 bank's own cash movements to a customer.
 
+Its dependencies are **pinned in a lock file**, which is the one place this service differs in
+kind from the rest of the repo. The Java side gets reproducible builds from the Spring Boot BOM
+and the frontend from `package-lock.json`; `insights/` had neither, just floors like
+`mlflow>=2.20`, so every image build resolved afresh against whatever PyPI was serving. It had
+already drifted a full major version (mlflow 3.x against pins written for 2.x) with no change to
+any file in the repo. Now `requirements.txt` declares bounded ranges and
+`requirements.lock` pins all 99 packages, transitive ones included; the Dockerfile and CI both
+install from the lock. Regenerate it with the command in that file's header — inside
+`python:3.13-slim`, so the pins match the platform the service actually runs on. CI re-resolves
+the declared ranges with the lock as a constraint set, so a lock that drifts outside its own
+declared bounds fails the build instead of going unnoticed.
+
 The categoriser is trained on a **synthetic, hand-written seed set**
 ([insights/app/model.py](insights/app/model.py)), because CoreBank has no real merchant feed. It
 is a genuine TF-IDF + logistic-regression pipeline tracked in MLflow, not a lookup table, but its

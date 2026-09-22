@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 tests/
 requirements-dev.txt
+requirements-dev.lock
