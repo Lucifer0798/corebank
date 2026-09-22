@@ -8,8 +8,13 @@ WORKDIR /app
 
 # Dependencies before source, so an edit to app/ reuses the (slow) pip layer -- the reason the
 # backend Dockerfile copies pom.xml before src/.
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+#
+# Installed from the lock, not requirements.txt: the lock pins every package including transitive
+# ones, so rebuilding this image a month from now installs what was tested rather than whatever
+# the index serves that day. requirements.txt is the declared list and is copied only so the
+# image carries a record of what was asked for alongside what was resolved.
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 
 COPY app/ ./app/
 
