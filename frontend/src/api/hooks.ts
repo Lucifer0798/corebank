@@ -250,6 +250,37 @@ export function useTransaction(reference: string | undefined) {
   });
 }
 
+export interface ReversalInput {
+  /** Required by the backend, and not merely as paperwork -- it becomes the reversal's description. */
+  reason: string;
+}
+
+/**
+ * Undoes a posting. ADMIN only; a TELLER token gets the backend's own 403.
+ *
+ * Two caches go stale at once, which is the whole reason this does not just invalidate by
+ * reference: the *original* is now REVERSED, and every account the mirrored legs touched has a
+ * new balance. The reversal's own legs name exactly those accounts -- including the GL cash leg,
+ * whose keys simply aren't cached -- so they are the right thing to invalidate over rather than
+ * an account id guessed at the call site.
+ */
+export function useReverseTransaction(reference: string) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ReversalInput) =>
+      api.post<Transaction>(`/transactions/${reference}/reversal`, input, newIdempotencyKey()),
+    onSuccess: (reversal) => {
+      queryClient.invalidateQueries({ queryKey: ["transaction", reference] });
+      queryClient.setQueryData(["transaction", reversal.reference], reversal);
+      invalidateAfterPosting(queryClient, reversal.legs.map((leg) => leg.accountId));
+      // Search is fed asynchronously off Kafka, so this only clears what was already fetched --
+      // a result list can still lag the ledger by however long the outbox relay takes.
+      queryClient.invalidateQueries({ queryKey: ["search", "transactions"] });
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Search -- bank-wide, cross-account (OpenSearch-backed). Staff only; see SearchController.
 // ---------------------------------------------------------------------------------------------

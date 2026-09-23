@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isStaff, rolesFromAccessToken } from "./roles";
+import { isAdmin, isStaff, rolesFromAccessToken } from "./roles";
 
 /**
  * This module decides what the UI offers, not what the caller may actually do -- the backend
@@ -68,5 +68,24 @@ describe("isStaff", () => {
   it("does not count a customer, or nobody at all, as staff", () => {
     expect(isStaff(["CUSTOMER"])).toBe(false);
     expect(isStaff([])).toBe(false);
+  });
+});
+
+describe("isAdmin", () => {
+  it("counts only admins", () => {
+    expect(isAdmin(["ADMIN"])).toBe(true);
+    expect(isAdmin(["CUSTOMER", "ADMIN"])).toBe(true);
+  });
+
+  it("does not count a teller", () => {
+    // The whole point of the helper: a teller is staff but must not be offered a reversal, so
+    // isStaff and isAdmin have to disagree here or the narrower check buys nothing.
+    expect(isStaff(["TELLER"])).toBe(true);
+    expect(isAdmin(["TELLER"])).toBe(false);
+  });
+
+  it("does not count a customer, or nobody at all", () => {
+    expect(isAdmin(["CUSTOMER"])).toBe(false);
+    expect(isAdmin([])).toBe(false);
   });
 });
