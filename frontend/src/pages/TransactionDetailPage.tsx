@@ -84,7 +84,7 @@ export function TransactionDetailPage() {
  * form. That is deliberate: "why is there no Reverse button here" is the question an admin would
  * otherwise have to answer by reading the backend.
  */
-function ReversalCard({ transaction }: { transaction: Transaction }) {
+export function ReversalCard({ transaction }: { transaction: Transaction }) {
   const reverse = useReverseTransaction(transaction.reference);
   const availability = reversalAvailability(transaction);
 
