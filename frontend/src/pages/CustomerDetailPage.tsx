@@ -12,13 +12,12 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { SpendingInsights } from "../components/SpendingInsights";
 import { StatusPill } from "../components/StatusPill";
 import { formatAmount } from "../format";
-import { rolesFromAccessToken } from "../auth/roles";
+import { isAdmin, rolesFromAccessToken } from "../auth/roles";
 
 export function CustomerDetailPage() {
   const { customerId } = useParams<{ customerId: string }>();
   const auth = useAuth();
-  const roles = rolesFromAccessToken(auth.user?.access_token);
-  const isAdmin = roles.includes("ADMIN");
+  const admin = isAdmin(rolesFromAccessToken(auth.user?.access_token));
 
   const { data: customer, isLoading, error } = useCustomer(customerId);
   const { data: accounts } = useAccountsForCustomer(customerId);
@@ -59,7 +58,7 @@ export function CustomerDetailPage() {
           {customer.email} {customer.phone ? `· ${customer.phone}` : ""}
         </p>
 
-        {isAdmin && customer.kycStatus === "PENDING" && (
+        {admin && customer.kycStatus === "PENDING" && (
           <div className="btn-row" style={{ marginTop: "0.75rem" }}>
             <ErrorBanner error={updateKyc.error} />
             <button className="btn" onClick={() => updateKyc.mutate("VERIFIED")} disabled={updateKyc.isPending}>

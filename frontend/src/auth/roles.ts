@@ -27,3 +27,12 @@ function isRole(value: unknown): value is Role {
 export function isStaff(roles: Role[]): boolean {
   return roles.includes("ADMIN") || roles.includes("TELLER");
 }
+
+/**
+ * Narrower than {@link isStaff}: the operations a teller must not reach. Reversing a posting is
+ * the first of them -- a teller moves money, an admin unwinds a movement -- and the backend
+ * enforces the same split with @PreAuthorize("hasRole('ADMIN')").
+ */
+export function isAdmin(roles: Role[]): boolean {
+  return roles.includes("ADMIN");
+}
