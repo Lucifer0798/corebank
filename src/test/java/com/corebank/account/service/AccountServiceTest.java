@@ -63,7 +63,7 @@ class AccountServiceTest {
         CoreBankProperties properties = new CoreBankProperties(
                 new CoreBankProperties.Ledger("GL0000000001", "GL0000000002"),
                 new CoreBankProperties.AccountSettings("1001"),
-                null, null, null);
+                null, null, null, null);
         accountService = new AccountService(accounts, customerService, sequences, properties);
 
         customer = new Customer();

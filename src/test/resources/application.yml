@@ -59,6 +59,14 @@ corebank:
     # "actually reach a broker" half needs a broker, which this suite structurally doesn't have.
     # CoreBankTestcontainersIT overrides this back to true, since it runs against a real one.
     relay-enabled: false
+  scheduled-transfers:
+    batch-size: 50
+    max-consecutive-failures: 3
+    poll-interval: 60s
+    # Off for the same reason relay-enabled is: a background poller that posts money has no
+    # business running underneath every unrelated test in this suite. ScheduledTransferRunnerIT
+    # drives the runner by calling run() directly, which needs no schedule at all.
+    enabled: false
 
 spring.grpc:
   server:

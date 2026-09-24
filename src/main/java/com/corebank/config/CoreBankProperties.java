@@ -18,7 +18,8 @@ public record CoreBankProperties(
         @Valid @NotNull AccountSettings account,
         @Valid @NotNull Web web,
         @Valid @NotNull Search search,
-        @Valid @NotNull Outbox outbox) {
+        @Valid @NotNull Outbox outbox,
+        @Valid @NotNull ScheduledTransfers scheduledTransfers) {
 
     public record Ledger(
             @NotBlank String cashAccountNumber,
@@ -55,5 +56,20 @@ public record CoreBankProperties(
      * outage instead of just leaving them durably unpublished.
      */
     public record Outbox(@Positive int batchSize, @NotNull Duration sendTimeout) {
+    }
+
+    /**
+     * {@code maxConsecutiveFailures} is where a standing instruction stops being retried and
+     * starts being somebody's problem. Too low and one short morning kills a year-long mandate;
+     * too high and a closed destination account is retried daily forever, with nobody told. Three
+     * is the smallest number that survives an ordinary run of bad luck without hiding a mandate
+     * that genuinely cannot be honoured.
+     *
+     * <p>{@code batchSize} bounds one tick, so a large backlog is worked through over several
+     * ticks rather than in one long transaction-heavy sweep.
+     */
+    public record ScheduledTransfers(
+            @Positive int batchSize,
+            @Positive int maxConsecutiveFailures) {
     }
 }

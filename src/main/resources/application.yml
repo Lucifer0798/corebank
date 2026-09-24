@@ -161,6 +161,19 @@ corebank:
     # through CoreBankProperties, since Spring only accepts fixedDelayString as a placeholder
     # expression, not a bound record field.
     relay-interval: 2s
+  scheduled-transfers:
+    # How many due mandates one tick claims. A larger backlog is worked through over several
+    # ticks rather than in a single sweep.
+    batch-size: 50
+    # Consecutive refusals before a mandate is suspended and left for a human -- see
+    # CoreBankProperties.ScheduledTransfers.
+    max-consecutive-failures: 3
+    # How often the runner looks for due mandates. Read straight from the placeholder by
+    # @Scheduled, for the same reason relay-interval above is.
+    poll-interval: 60s
+    # Set false to keep the runner out of a context entirely, the way relay-enabled does for the
+    # outbox. ScheduledTransferRunner reads this through @ConditionalOnProperty.
+    enabled: ${COREBANK_SCHEDULED_TRANSFERS_ENABLED:true}
 
 logging:
   level:
