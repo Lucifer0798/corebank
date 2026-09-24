@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import java.time.LocalDate;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
@@ -676,6 +677,96 @@ class CoreBankApiIntegrationTest {
                         .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(JSON).content("""
                         {"reason":"Nothing to undo"}"""))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+    }
+
+    @Test
+    @Order(33)
+    @DisplayName("a teller can set up a standing instruction, and the owner can see it")
+    void scheduledTransfersCanBeSetUp() throws Exception {
+        String today = LocalDate.now().toString();
+
+        String created = mockMvc.perform(post("/api/v1/scheduled-transfers").with(teller())
+                        .contentType(JSON).content("""
+                        {"sourceAccountId":"%s","destinationAccountId":"%s","amount":100.00,
+                         "currency":"INR","description":"Rent","frequency":"MONTHLY","startsOn":"%s"}"""
+                        .formatted(savingsId, currentId, today)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.frequency").value("MONTHLY"))
+                .andExpect(jsonPath("$.nextRunOn").value(today))
+                .andExpect(jsonPath("$.runsCompleted").value(0))
+                .andReturn().getResponse().getContentAsString();
+        String scheduleId = JsonPath.read(created, "$.id");
+
+        // Unlike a transfer, this needs no Idempotency-Key: a duplicate request leaves a visible
+        // second mandate that can be cancelled, not money moved twice.
+        mockMvc.perform(get("/api/v1/scheduled-transfers/{id}", scheduleId).with(teller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sourceAccountId").value(savingsId));
+
+        // Listed against both accounts it names, not just the one paying.
+        mockMvc.perform(get("/api/v1/accounts/{id}/scheduled-transfers", currentId).with(teller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(scheduleId));
+
+        // Asha owns these accounts (linked in the identity step above), so she reads her own
+        // standing instructions through the same account-scoped rule that guards her statement.
+        mockMvc.perform(get("/api/v1/accounts/{id}/scheduled-transfers", savingsId)
+                        .with(customer(ASHA_SUBJECT)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1));
+
+        mockMvc.perform(post("/api/v1/scheduled-transfers/{id}/cancel", scheduleId).with(teller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.nextRunOn").doesNotExist());
+
+        // Cancelling a stopped mandate is a rule violation, not a silent success -- a caller
+        // retrying needs to know the second call did nothing.
+        mockMvc.perform(post("/api/v1/scheduled-transfers/{id}/cancel", scheduleId).with(teller()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("SCHEDULE_NOT_ACTIVE"));
+    }
+
+    @Test
+    @Order(34)
+    @DisplayName("a schedule that could never run sensibly is refused at creation")
+    void impossibleSchedulesAreRefused() throws Exception {
+        String yesterday = LocalDate.now().minusDays(1).toString();
+        String today = LocalDate.now().toString();
+
+        // Backdating would fire immediately and then keep firing until it caught up -- posting a
+        // year of a monthly instruction in one afternoon.
+        mockMvc.perform(post("/api/v1/scheduled-transfers").with(teller())
+                        .contentType(JSON).content("""
+                        {"sourceAccountId":"%s","destinationAccountId":"%s","amount":100.00,
+                         "frequency":"DAILY","startsOn":"%s"}"""
+                        .formatted(savingsId, currentId, yesterday)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("SCHEDULE_STARTS_IN_PAST"));
+
+        mockMvc.perform(post("/api/v1/scheduled-transfers").with(teller())
+                        .contentType(JSON).content("""
+                        {"sourceAccountId":"%s","destinationAccountId":"%s","amount":100.00,
+                         "frequency":"DAILY","startsOn":"%s"}"""
+                        .formatted(savingsId, savingsId, today)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("SAME_ACCOUNT_TRANSFER"));
+
+        // A window ending before the first occurrence would otherwise persist as a mandate that
+        // is permanently active and never due.
+        mockMvc.perform(post("/api/v1/scheduled-transfers").with(teller())
+                        .contentType(JSON).content("""
+                        {"sourceAccountId":"%s","destinationAccountId":"%s","amount":100.00,
+                         "frequency":"DAILY","startsOn":"%s","endsOn":"%s"}"""
+                        .formatted(savingsId, currentId, today, yesterday)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("INVALID_DATE_RANGE"));
+
+        mockMvc.perform(get("/api/v1/scheduled-transfers/{id}", UUID.randomUUID()).with(teller()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
