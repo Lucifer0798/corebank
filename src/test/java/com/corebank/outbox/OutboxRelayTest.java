@@ -44,7 +44,8 @@ class OutboxRelayTest {
     void setUp() {
         CoreBankProperties properties = new CoreBankProperties(
                 null, null, null, null,
-                new CoreBankProperties.Outbox(50, Duration.ofSeconds(3)));
+                new CoreBankProperties.Outbox(50, Duration.ofSeconds(3)),
+                null);
         relay = new OutboxRelay(repository, kafkaTemplate, properties);
     }
 
