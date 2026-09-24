@@ -28,6 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
+| Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner. |
 | Reversals | An admin can undo a posting. The correction is its own transaction with mirrored legs -- nothing is edited or erased. |
 | Idempotency | Every money-moving `POST` requires an `Idempotency-Key`. Retries never post twice. |
 | Statements | Paginated account history, newest first, signed from that account's point of view. |
@@ -293,6 +294,38 @@ correction is not new lending; refusing one because the customer has since spent
 would leave the ledger permanently wrong about a movement that should never have happened.
 A reversal is **not** itself reversible: correcting a mistaken reversal means posting the
 original movement again, not stacking a second correction on the first.
+
+### Scheduled transfers
+
+A standing instruction is the only thing here that moves money with no request behind it, and
+almost every design decision follows from that.
+
+`ScheduledTransferRunner` polls for mandates that have come due and advances **one occurrence per
+mandate per tick**. After an outage a daily instruction is several occurrences behind; it catches
+up over successive ticks rather than posting the backlog in one burst, so each payment stays a
+separate, individually idempotent unit.
+
+Every due date is measured from the mandate's start date rather than from the previous one. Adding
+a month to the last run would let an instruction drift: starting 31 January it would clamp to 28
+February, then take 28 March as the next base, and quietly move a customer's rent three days
+earlier for good. Anchored to the start it clamps only in the short months and returns to the 31st
+in the long ones.
+
+**The idempotency key is derived, not random** — `sched:<mandate id>:<due date>` — and that single
+fact is what makes the runner safe. Posting the money and recording that it was posted are
+necessarily two separate transactions (wrapping them in one would invert the order in which
+`IdempotencyService` commits a key's completion, so a rollback could leave a key marked done with
+no posting behind it). Crash in between and the occurrence is simply due again next tick: the
+transfer replays from the stored response instead of paying twice, and the bookkeeping completes.
+The `SKIP LOCKED` row claim stops two replicas doing redundant work; it is not what stops a double
+payment.
+
+A refused occurrence — nearly always insufficient funds — is **skipped rather than retried in
+place**, because the poll interval would otherwise hammer a short account all day. Three
+consecutive refusals suspend the mandate: enough to survive an ordinary run of bad luck, few
+enough that an instruction nobody can honour ends up in front of a human instead of retrying
+forever. A mandate that runs out of occurrences after a failure is `SUSPENDED`, not `COMPLETED` —
+`COMPLETED` means the money moved.
 
 ### Idempotency
 
@@ -562,6 +595,10 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/accounts/{id}/deposits` | TELLER, ADMIN | Deposit — needs `Idempotency-Key` |
 | `POST` | `/api/v1/accounts/{id}/withdrawals` | TELLER, ADMIN | Withdraw — needs `Idempotency-Key` |
 | `POST` | `/api/v1/transfers` | TELLER, ADMIN | Transfer — needs `Idempotency-Key` |
+| `POST` | `/api/v1/scheduled-transfers` | TELLER, ADMIN | Set up a standing instruction |
+| `GET` | `/api/v1/scheduled-transfers/{id}` | TELLER, ADMIN | One instruction, and how it has fared |
+| `GET` | `/api/v1/accounts/{id}/scheduled-transfers` | owner, staff | Instructions against one account, both directions |
+| `POST` | `/api/v1/scheduled-transfers/{id}/cancel` | TELLER, ADMIN | Stop one |
 | `POST` | `/api/v1/transactions/{reference}/reversal` | ADMIN | Reverse a posting — needs `Idempotency-Key` and a `reason` |
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
@@ -610,6 +647,9 @@ as REST, passed as `authorization` metadata.
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
 | `SAME_ACCOUNT_TRANSFER` | 422 | Source and destination are the same account |
+| `SCHEDULE_STARTS_IN_PAST` | 422 | A standing instruction cannot be backdated |
+| `SCHEDULE_NEVER_RUNS` | 422 | The window contains no occurrence |
+| `SCHEDULE_NOT_ACTIVE` | 422 | That instruction has already stopped |
 | `OVERDRAFT_NOT_ALLOWED` | 422 | Savings accounts cannot carry an overdraft |
 | `BALANCE_NOT_ZERO` | 422 | An account must be emptied before it is closed |
 | `INTERNAL_ACCOUNT` | 422 | General-ledger accounts are not addressable here |
@@ -670,6 +710,7 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | Where spans are exported to (Tempo, or any OTLP/HTTP collector) |
 | `COREBANK_OPENSEARCH_URI` | `http://localhost:9200` | Search index; an outage degrades `/api/v1/search/**` to `503`, nothing else |
 | `COREBANK_GRPC_PORT` | `9091` | gRPC listener; 9091 rather than 9090, which Prometheus owns |
+| `COREBANK_SCHEDULED_TRANSFERS_ENABLED` | `true` | Set `false` to keep the standing-instruction runner out of a replica entirely. Safe on any number of replicas when left on -- the claim is `SKIP LOCKED` and each occurrence carries a derived idempotency key |
 | `SERVER_PORT` | `8080` | |
 
 The insights service is configured separately, with an `INSIGHTS_` prefix:
