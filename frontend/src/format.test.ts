@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatAmount, formatCalendarDate, formatDate, formatDateTime } from "./format";
 
 /**
@@ -79,13 +79,14 @@ describe("formatDate and formatDateTime", () => {
  * would ship invisibly.
  */
 describe("formatCalendarDate", () => {
+  // vi.stubEnv rather than assigning process.env directly: this package's tsconfig has no Node
+  // types, so `process` type-checks in vitest but fails `tsc -b`, and the build is what CI runs.
   const withTimeZone = (tz: string, run: () => void) => {
-    const original = process.env.TZ;
-    process.env.TZ = tz;
+    vi.stubEnv("TZ", tz);
     try {
       run();
     } finally {
-      process.env.TZ = original;
+      vi.unstubAllEnvs();
     }
   };
 
