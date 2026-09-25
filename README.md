@@ -28,7 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
-| Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner. |
+| Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner, set up and cancelled from the account page. |
 | Reversals | An admin can undo a posting. The correction is its own transaction with mirrored legs -- nothing is edited or erased. |
 | Idempotency | Every money-moving `POST` requires an `Idempotency-Key`. Retries never post twice. |
 | Statements | Paginated account history, newest first, signed from that account's point of view. |
@@ -39,7 +39,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | gRPC | A read-only service-to-service surface (accounts, transactions, streamed statements) over the same service layer and the same Keycloak tokens as REST. |
 | Spending insights | A separate Python service categorises each posting off the Kafka feed and serves per-customer spending summaries. Read-only: it never writes to the ledger. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
-| Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements, and admin-only reversals. |
+| Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements, standing instructions, and admin-only reversals. |
 | Observability | Every request traced end to end (OpenTelemetry/Tempo); business and platform metrics in Grafana. |
 | CI | Every push builds and tests the backend and frontend, scans the Docker image with Trivy, and runs CodeQL. |
 | Docs | Swagger UI at `/swagger-ui.html`, OpenAPI JSON at `/v3/api-docs`. |
@@ -94,7 +94,15 @@ categoriser playground, and a click-through to a transaction's ledger legs. That
 is also where an **ADMIN** can reverse a posting: the card states what a reversal does before
 asking for the mandatory reason, and when a posting cannot be reversed it says which of the two
 rules applies rather than hiding the control. A TELLER never sees it at all — the backend refuses
-them regardless, so offering a disabled button would only imply the split is negotiable. Every customer view
+them regardless, so offering a disabled button would only imply the split is negotiable.
+
+An account page also lists the **standing instructions** touching that account, in both
+directions and signed from that account's side, since the same mandate is money leaving one
+account and arriving in another. A customer sees their own; only staff can set one up or
+cancel it. The list leads with what the API exposed but nothing previously showed: a mandate
+that has started failing, with the backend's own reason attached, and one that has been
+suspended after too many failures -- which is terminal, so the card says to set up a
+replacement rather than leaving someone hunting for a resume button. Every customer view
 (staff viewing one customer, or a CUSTOMER role viewing their own accounts) gets a **Spending
 insights** section: category breakdown and recent categorised entries, pulled live from the
 insights service.

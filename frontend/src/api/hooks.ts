@@ -8,6 +8,8 @@ import type {
   CustomerSearchHit,
   KycStatus,
   PagedResponse,
+  ScheduleFrequency,
+  ScheduledTransfer,
   SearchResponse,
   StatementLine,
   Transaction,
@@ -279,6 +281,74 @@ export function useReverseTransaction(reference: string) {
       queryClient.invalidateQueries({ queryKey: ["search", "transactions"] });
     },
   });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scheduled transfers -- standing instructions, posted by a background runner. The list is
+// account-scoped and guarded by the same ownership rule as the statement, so a customer reads
+// their own; creating and cancelling are staff operations.
+// ---------------------------------------------------------------------------------------------
+
+export function useScheduledTransfers(accountId: string | undefined, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["scheduledTransfers", accountId, page],
+    queryFn: () =>
+      api.get<PagedResponse<ScheduledTransfer>>(`/accounts/${accountId}/scheduled-transfers`, {
+        page,
+        size: 20,
+      }),
+    enabled: Boolean(accountId),
+  });
+}
+
+export interface ScheduledTransferInput {
+  sourceAccountId: string;
+  destinationAccountId: string;
+  amount: number;
+  currency?: string;
+  description?: string;
+  frequency: ScheduleFrequency;
+  startsOn: string;
+  endsOn?: string;
+}
+
+/**
+ * No Idempotency-Key, and the endpoint wants none: a duplicate request here leaves a second
+ * visible mandate that can be cancelled rather than moving money twice. The occurrences it goes
+ * on to post are each idempotent under a key the backend derives.
+ */
+export function useCreateScheduledTransfer() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ScheduledTransferInput) =>
+      api.post<ScheduledTransfer>("/scheduled-transfers", input),
+    onSuccess: (schedule) => invalidateSchedules(queryClient, schedule),
+  });
+}
+
+export function useCancelScheduledTransfer() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (scheduleId: string) =>
+      api.post<ScheduledTransfer>(`/scheduled-transfers/${scheduleId}/cancel`),
+    onSuccess: (schedule) => invalidateSchedules(queryClient, schedule),
+  });
+}
+
+/**
+ * A mandate is listed against both accounts it names, so both lists go stale together -- the page
+ * showing only one of them would otherwise keep displaying a cancelled instruction as live.
+ */
+function invalidateSchedules(
+  queryClient: ReturnType<typeof useQueryClient>,
+  schedule: ScheduledTransfer,
+) {
+  for (const id of [schedule.sourceAccountId, schedule.destinationAccountId]) {
+    queryClient.invalidateQueries({ queryKey: ["scheduledTransfers", id] });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

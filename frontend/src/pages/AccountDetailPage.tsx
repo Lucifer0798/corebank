@@ -1,22 +1,27 @@
-import { useState, type FormEvent } from "react";
+import { Fragment, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { useAuth } from "react-oidc-context";
 import {
   useAccount,
   useBalance,
+  useCancelScheduledTransfer,
   useCloseAccount,
+  useCreateScheduledTransfer,
   useDeposit,
   useFreezeAccount,
+  useScheduledTransfers,
   useStatement,
   useTransfer,
   useUnfreezeAccount,
   useWithdraw,
   type AmountInput,
 } from "../api/hooks";
+import type { Account, ScheduleFrequency } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { StatusPill } from "../components/StatusPill";
-import { formatAmount, formatDateTime } from "../format";
+import { formatAmount, formatCalendarDate, formatDateTime } from "../format";
 import { isStaff, rolesFromAccessToken } from "../auth/roles";
+import { canCancel, directionFor, scheduleAttention } from "../schedule";
 
 export function AccountDetailPage() {
   const { accountId } = useParams<{ accountId: string }>();
@@ -87,6 +92,8 @@ export function AccountDetailPage() {
       </div>
 
       {staff && account.status !== "CLOSED" && <MoneyMovementCard accountId={account.id} />}
+
+      <ScheduledTransfersCard account={account} staff={staff} />
 
       <div className="card">
         <h3>Statement</h3>
@@ -239,5 +246,167 @@ function DescriptionField() {
       <label htmlFor="description">Description (optional)</label>
       <input id="description" name="description" maxLength={255} />
     </div>
+  );
+}
+/**
+ * Standing instructions touching this account, in both directions. Visible to the owner as well
+ * as to staff -- it is the customer's own money on a timer, and the backend's account-scoped rule
+ * already lets them read it -- but only staff can create or cancel one.
+ *
+ * <p>The list leads with what the API makes visible and nothing else did: a mandate that has
+ * failed but is still trying, and one that gave up. Both were previously discoverable only by
+ * reading the JSON.
+ */
+export function ScheduledTransfersCard({ account, staff }: { account: Account; staff: boolean }) {
+  const [page, setPage] = useState(0);
+  const { data: schedules, error } = useScheduledTransfers(account.id, page);
+  const cancel = useCancelScheduledTransfer();
+
+  return (
+    <div className="card">
+      <h3>Standing instructions</h3>
+      <ErrorBanner error={error || cancel.error} />
+
+      <table>
+        <thead>
+          <tr>
+            <th>Next</th>
+            <th>Frequency</th>
+            <th>Amount</th>
+            <th>Description</th>
+            <th>Status</th>
+            {staff && <th />}
+          </tr>
+        </thead>
+        <tbody>
+          {schedules?.content.map((schedule) => {
+            const attention = scheduleAttention(schedule);
+            const outgoing = directionFor(schedule, account.id) === "out";
+            return (
+              <Fragment key={schedule.id}>
+                <tr>
+                  <td className="muted">
+                    {schedule.nextRunOn ? formatCalendarDate(schedule.nextRunOn) : "—"}
+                  </td>
+                  <td>{schedule.frequency}</td>
+                  {/* Signed from this account's side, the way a statement line is: the same
+                      mandate is money leaving one account and arriving in the other. */}
+                  <td className={`amount ${outgoing ? "amount--negative" : "amount--positive"}`}>
+                    {formatAmount(outgoing ? -schedule.amount : schedule.amount, schedule.currency)}
+                  </td>
+                  <td className="muted">{schedule.description ?? "—"}</td>
+                  <td><StatusPill status={schedule.status} /></td>
+                  {staff && (
+                    <td>
+                      {canCancel(schedule) && (
+                        <button
+                          className="btn btn--secondary"
+                          disabled={cancel.isPending}
+                          onClick={() => cancel.mutate(schedule.id)}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+                {attention.level !== "none" && (
+                  <tr>
+                    <td colSpan={staff ? 6 : 5} className="muted">
+                      {attention.message}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+          {schedules && schedules.content.length === 0 && (
+            <tr>
+              <td colSpan={staff ? 6 : 5} className="muted">Nothing scheduled against this account.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <div className="btn-row" style={{ marginTop: "1rem" }}>
+        <button className="btn btn--secondary" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+          Previous
+        </button>
+        <button className="btn btn--secondary" disabled={schedules?.last} onClick={() => setPage((p) => p + 1)}>
+          Next
+        </button>
+      </div>
+
+      {staff && account.status !== "CLOSED" && <NewScheduleForm account={account} />}
+    </div>
+  );
+}
+
+function NewScheduleForm({ account }: { account: Account }) {
+  const create = useCreateScheduledTransfer();
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const endsOn = String(form.get("endsOn") ?? "").trim();
+    create.mutate({
+      sourceAccountId: account.id,
+      destinationAccountId: String(form.get("destinationAccountId")),
+      amount: Number(form.get("amount")),
+      currency: account.currency,
+      description: String(form.get("description") ?? "").trim() || undefined,
+      frequency: form.get("frequency") as ScheduleFrequency,
+      startsOn: String(form.get("startsOn")),
+      // Omitted rather than sent empty: the API reads a missing end date as "until cancelled",
+      // and an empty string is not a date it will accept.
+      endsOn: endsOn || undefined,
+    });
+    event.currentTarget.reset();
+  }
+
+  return (
+    <>
+      <h4 style={{ marginTop: "1.5rem" }}>New standing instruction</h4>
+      <p className="muted">
+        Pays out of this account on the schedule below. The first payment falls on the start date,
+        which cannot be in the past.
+      </p>
+      <ErrorBanner error={create.error} />
+      {create.isSuccess && <p style={{ color: "var(--color-success)" }}>Scheduled.</p>}
+      <form className="form" onSubmit={handleSubmit}>
+        <div className="form-row">
+          <label htmlFor="destinationAccountId">Destination account id</label>
+          <input id="destinationAccountId" name="destinationAccountId" required />
+        </div>
+        <div className="form-row">
+          <label htmlFor="scheduleAmount">Amount</label>
+          <input id="scheduleAmount" name="amount" type="number" step="0.01" min="0.01" required />
+        </div>
+        <div className="form-row">
+          <label htmlFor="frequency">Frequency</label>
+          <select id="frequency" name="frequency" defaultValue="MONTHLY">
+            <option value="ONCE">Once</option>
+            <option value="DAILY">Daily</option>
+            <option value="WEEKLY">Weekly</option>
+            <option value="MONTHLY">Monthly</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <label htmlFor="startsOn">Starts on</label>
+          <input id="startsOn" name="startsOn" type="date" required />
+        </div>
+        <div className="form-row">
+          <label htmlFor="endsOn">Ends on (optional)</label>
+          <input id="endsOn" name="endsOn" type="date" />
+        </div>
+        <div className="form-row">
+          <label htmlFor="scheduleDescription">Description</label>
+          <input id="scheduleDescription" name="description" maxLength={255} />
+        </div>
+        <button className="btn" type="submit" disabled={create.isPending}>
+          {create.isPending ? "Scheduling…" : "Schedule"}
+        </button>
+      </form>
+    </>
   );
 }
