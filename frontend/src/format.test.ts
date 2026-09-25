@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAmount, formatDate, formatDateTime } from "./format";
+import { formatAmount, formatCalendarDate, formatDate, formatDateTime } from "./format";
 
 /**
  * formatAmount memoises one Intl.NumberFormat per currency. That cache is the part worth
@@ -69,5 +69,57 @@ describe("formatDate and formatDateTime", () => {
   it("degrades rather than throwing on an unparseable timestamp", () => {
     expect(() => formatDateTime("not a timestamp")).not.toThrow();
     expect(formatDateTime("not a timestamp")).toBe("Invalid Date");
+  });
+});
+
+/**
+ * A backend LocalDate is a calendar date, not an instant, and the difference is a whole day for
+ * anyone west of UTC. These run with the process timezone forced to one of those, because in IST
+ * -- where this is developed -- the broken and the correct implementation agree, and the bug
+ * would ship invisibly.
+ */
+describe("formatCalendarDate", () => {
+  const withTimeZone = (tz: string, run: () => void) => {
+    const original = process.env.TZ;
+    process.env.TZ = tz;
+    try {
+      run();
+    } finally {
+      process.env.TZ = original;
+    }
+  };
+
+  it("keeps the day the backend said, in a timezone behind UTC", () => {
+    withTimeZone("America/New_York", () => {
+      // new Date("2026-10-01") is UTC midnight; rendered in New York that is 30 September.
+      // A standing order due on the 1st must not read as the 31st.
+      const formatted = formatCalendarDate("2026-10-01");
+      expect(formatted).toContain("1");
+      expect(formatted).toContain("Oct");
+      expect(formatted).not.toContain("Sep");
+    });
+  });
+
+  it("keeps the day in a timezone ahead of UTC too", () => {
+    withTimeZone("Asia/Kolkata", () => {
+      const formatted = formatCalendarDate("2026-10-01");
+      expect(formatted).toContain("Oct");
+      expect(formatted).not.toContain("Sep");
+    });
+  });
+
+  it("handles the first of January without slipping into the previous year", () => {
+    withTimeZone("America/New_York", () => {
+      const formatted = formatCalendarDate("2026-01-01");
+      expect(formatted).toContain("2026");
+      expect(formatted).not.toContain("2025");
+    });
+  });
+
+  it("falls back rather than breaking when handed a full instant by mistake", () => {
+    // Not the intended input, but a page that renders the wrong shape is better than one that
+    // throws on the way past.
+    expect(() => formatCalendarDate("2026-03-15T12:00:00Z")).not.toThrow();
+    expect(formatCalendarDate("2026-03-15T12:00:00Z")).toContain("2026");
   });
 });

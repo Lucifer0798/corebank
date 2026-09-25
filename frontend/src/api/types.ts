@@ -75,6 +75,29 @@ export interface Transaction {
   legs: TransactionLeg[];
 }
 
+export type ScheduleFrequency = "ONCE" | "DAILY" | "WEEKLY" | "MONTHLY";
+export type ScheduleStatus = "ACTIVE" | "SUSPENDED" | "COMPLETED" | "CANCELLED";
+
+export interface ScheduledTransfer {
+  id: string;
+  sourceAccountId: string;
+  destinationAccountId: string;
+  amount: number;
+  currency: string;
+  description: string | null;
+  frequency: ScheduleFrequency;
+  /** Calendar dates (YYYY-MM-DD), not instants -- see formatCalendarDate. */
+  startsOn: string;
+  endsOn: string | null;
+  status: ScheduleStatus;
+  /** Null once nothing further is due. */
+  nextRunOn: string | null;
+  runsCompleted: number;
+  consecutiveFailures: number;
+  lastRunOn: string | null;
+  lastError: string | null;
+}
+
 export interface StatementLine {
   entryId: string;
   reference: string;
