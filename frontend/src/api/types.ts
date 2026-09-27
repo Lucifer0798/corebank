@@ -39,6 +39,8 @@ export interface Account {
   currency: string;
   balance: number;
   availableBalance: number;
+  /** Reserved by outstanding authorisation holds; already subtracted from availableBalance. */
+  heldAmount: number;
   overdraftLimit: number;
   status: AccountStatus;
   openedAt: string;
@@ -50,6 +52,7 @@ export interface Balance {
   currency: string;
   balance: number;
   availableBalance: number;
+  heldAmount: number;
   asOf: string;
 }
 

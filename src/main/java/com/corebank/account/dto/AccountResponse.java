@@ -16,6 +16,13 @@ public record AccountResponse(
         String currency,
         BigDecimal balance,
         BigDecimal availableBalance,
+
+        @io.swagger.v3.oas.annotations.media.Schema(
+                description = "Reserved by outstanding authorisation holds, and already subtracted "
+                        + "from availableBalance. Shown separately so the gap between the two figures "
+                        + "has a visible reason.")
+        BigDecimal heldAmount,
+
         BigDecimal overdraftLimit,
         AccountStatus status,
         Instant openedAt,
@@ -30,6 +37,7 @@ public record AccountResponse(
                 account.getCurrency(),
                 Money.normalize(account.getBalance()),
                 account.availableBalance(),
+                Money.normalize(account.getHeldAmount()),
                 Money.normalize(account.getOverdraftLimit()),
                 account.getStatus(),
                 account.getOpenedAt(),

@@ -771,6 +771,107 @@ class CoreBankApiIntegrationTest {
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
     }
 
+    @Test
+    @Order(35)
+    @DisplayName("a hold reserves money, and capturing it posts a real withdrawal")
+    void holdsReserveAndCapture() throws Exception {
+        String before = mockMvc.perform(get("/api/v1/accounts/{id}/balance", savingsId).with(teller()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        double balanceBefore = ((Number) JsonPath.read(before, "$.balance")).doubleValue();
+        double availableBefore = ((Number) JsonPath.read(before, "$.availableBalance")).doubleValue();
+
+        String placed = mockMvc.perform(post("/api/v1/accounts/{id}/holds", savingsId).with(teller())
+                        .header("Idempotency-Key", "it-hold-1")
+                        .contentType(JSON).content("""
+                        {"amount":500.00,"currency":"INR","description":"Hotel authorisation"}"""))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotency-Replayed", "false"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andReturn().getResponse().getContentAsString();
+        String reference = JsonPath.read(placed, "$.reference");
+
+        // Reserved, not moved: the ledger is untouched and only the available figure changes.
+        mockMvc.perform(get("/api/v1/accounts/{id}/balance", savingsId).with(teller()))
+                .andExpect(jsonPath("$.balance").value(balanceBefore))
+                .andExpect(jsonPath("$.availableBalance").value(availableBefore - 500.00));
+
+        // Replaying the key must not reserve a second time.
+        mockMvc.perform(post("/api/v1/accounts/{id}/holds", savingsId).with(teller())
+                        .header("Idempotency-Key", "it-hold-1")
+                        .contentType(JSON).content("""
+                        {"amount":500.00,"currency":"INR","description":"Hotel authorisation"}"""))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotency-Replayed", "true"));
+
+        // The final bill is lower than the authorisation, which is the ordinary case.
+        mockMvc.perform(post("/api/v1/holds/{reference}/capture", reference).with(teller())
+                        .header("Idempotency-Key", "it-capture-1")
+                        .contentType(JSON).content("""
+                        {"amount":320.00}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CAPTURED"))
+                .andExpect(jsonPath("$.capturedTransactionReference").isNotEmpty());
+
+        mockMvc.perform(get("/api/v1/accounts/{id}/balance", savingsId).with(teller()))
+                .andExpect(jsonPath("$.balance").value(balanceBefore - 320.00))
+                .andExpect(jsonPath("$.availableBalance").value(availableBefore - 320.00));
+
+        // Capturing twice is a conflict, not a second withdrawal.
+        mockMvc.perform(post("/api/v1/holds/{reference}/capture", reference).with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("{}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("HOLD_NOT_ACTIVE"));
+    }
+
+    @Test
+    @Order(36)
+    @DisplayName("a released hold gives the money back, and the owner can see both")
+    void holdsCanBeReleasedAndListed() throws Exception {
+        String placed = mockMvc.perform(post("/api/v1/accounts/{id}/holds", savingsId).with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"amount":100.00,"description":"Cancelled booking"}"""))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String reference = JsonPath.read(placed, "$.reference");
+
+        mockMvc.perform(post("/api/v1/holds/{reference}/release", reference).with(teller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RELEASED"))
+                .andExpect(jsonPath("$.capturedTransactionReference").doesNotExist());
+
+        // Asha owns this account, so she reads her own holds through the same rule that guards
+        // her statement -- settled ones included, since what expired and what was billed is
+        // exactly what a customer querying a charge wants to see.
+        mockMvc.perform(get("/api/v1/accounts/{id}/holds", savingsId).with(customer(ASHA_SUBJECT)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2));
+
+        // 409, not 422, and for the same reason ALREADY_REVERSED is: the hold was releasable a
+        // moment ago and is not any more. It is also what a retry without a key looks like.
+        mockMvc.perform(post("/api/v1/holds/{reference}/release", reference).with(teller()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("HOLD_NOT_ACTIVE"));
+    }
+
+    @Test
+    @Order(37)
+    @DisplayName("a hold beyond the available balance is refused, and an unknown one is a 404")
+    void unaffordableAndUnknownHolds() throws Exception {
+        mockMvc.perform(post("/api/v1/accounts/{id}/holds", savingsId).with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"amount":9999999.00}"""))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("INSUFFICIENT_FUNDS"));
+
+        mockMvc.perform(get("/api/v1/holds/{reference}", "HLD-does-not-exist").with(teller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+    }
+
     // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web
     // environment (what @AutoConfigureMockMvc drives) does not register the actuator endpoint
     // mapping the way a real embedded servlet container does, so a MockMvc request to any

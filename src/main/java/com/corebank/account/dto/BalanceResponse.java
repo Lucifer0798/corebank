@@ -9,6 +9,7 @@ public record BalanceResponse(
         String currency,
         BigDecimal balance,
         BigDecimal availableBalance,
+        BigDecimal heldAmount,
         Instant asOf) {
 
     public static BalanceResponse from(AccountResponse account) {
@@ -17,6 +18,7 @@ public record BalanceResponse(
                 account.currency(),
                 account.balance(),
                 account.availableBalance(),
+                account.heldAmount(),
                 Instant.now());
     }
 }
