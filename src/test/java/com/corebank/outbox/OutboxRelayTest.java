@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.corebank.config.CoreBankProperties;
+import com.corebank.config.TestProperties;
 import com.corebank.outbox.domain.OutboxAggregateType;
 import com.corebank.outbox.domain.OutboxEvent;
 import com.corebank.outbox.repository.OutboxEventRepository;
@@ -42,11 +43,8 @@ class OutboxRelayTest {
 
     @BeforeEach
     void setUp() {
-        CoreBankProperties properties = new CoreBankProperties(
-                null, null, null, null,
-                new CoreBankProperties.Outbox(50, Duration.ofSeconds(3)),
-                null);
-        relay = new OutboxRelay(repository, kafkaTemplate, properties);
+        relay = new OutboxRelay(repository, kafkaTemplate,
+                TestProperties.withOutbox(new CoreBankProperties.Outbox(50, Duration.ofSeconds(3))));
     }
 
     private static OutboxEvent event(String topic, String key) {

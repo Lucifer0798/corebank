@@ -44,6 +44,24 @@ public interface AccountHoldRepository extends JpaRepository<AccountHold, UUID> 
     List<UUID> findExpiredIds(@Param("status") HoldStatus status, @Param("now") Instant now, Pageable pageable);
 
     /**
+     * Holds placed on this account within a window and still outstanding -- what the velocity check
+     * counts alongside the day's settled debits.
+     *
+     * <p>Only ACTIVE ones, and that is not an oversight: a hold captured today already appears in
+     * the ledger sum the limit reads, so counting it here too would charge one purchase against the
+     * customer's allowance twice.
+     */
+    @Query("""
+            SELECT COALESCE(SUM(h.amount), 0) FROM AccountHold h
+            WHERE h.account.id = :accountId
+              AND h.status = com.corebank.account.domain.HoldStatus.ACTIVE
+              AND h.placedAt >= :from AND h.placedAt < :to
+            """)
+    java.math.BigDecimal sumOutstandingPlacedBetween(@Param("accountId") UUID accountId,
+                                                     @Param("from") Instant from,
+                                                     @Param("to") Instant to);
+
+    /**
      * What the account's held_amount column ought to be. Nothing in the running application reads
      * this -- the column is maintained incrementally -- but a reconciliation that cannot be
      * expressed has to be taken on trust, and this is the one assertion that proves the

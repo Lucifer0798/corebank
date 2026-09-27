@@ -28,6 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
+| Velocity limits | A per-account daily debit ceiling and a per-posting ceiling, counted from the ledger. |
 | Holds | Authorisation holds reserve money without posting it. Captured, released, or expired by a sweep. |
 | Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner, set up and cancelled from the account page. |
 | Reversals | An admin can undo a posting. The correction is its own transaction with mirrored legs -- nothing is edited or erased. |
@@ -303,6 +304,36 @@ correction is not new lending; refusing one because the customer has since spent
 would leave the ledger permanently wrong about a movement that should never have happened.
 A reversal is **not** itself reversible: correcting a mistaken reversal means posting the
 original movement again, not stacking a second correction on the first.
+
+### Velocity limits
+
+Two ceilings, per account: one on a single posting, one on a UTC calendar day's total debits. They
+apply to withdrawals and outgoing transfers — not to deposits or incoming transfers, since money
+arriving is not what a velocity control is about, and applying it there would refuse a customer
+their own salary.
+
+`TRANSACTION_LIMIT_EXCEEDED` and `DAILY_LIMIT_EXCEEDED` are separate codes, and separate from
+`INSUFFICIENT_FUNDS`. "You do not have the money" and "you have the money but not today" are
+opposite problems, and a customer told the first when the second is true goes and checks a balance
+that was never wrong. The daily refusal states the remaining allowance, because that is the only
+number in it the caller can act on.
+
+**The day's total is summed from the ledger, not kept in a counter** — the opposite choice from
+`account.held_amount`, and for a specific reason. A counter would need decrementing whenever a
+withdrawal was reversed, and a bug there costs a customer allowance for a posting the bank itself
+undid. Two predicates in one query handle it instead: `status = POSTED` drops a withdrawal that was
+later reversed, and `type <> REVERSAL` drops the correcting legs, so that reversing a mistaken
+*deposit* — which debits the customer — is not counted as the customer spending. The existing
+`idx_entry_account_posted` index serves the read, inside a transaction that already holds the
+account's row lock.
+
+**Holds are checked at authorisation, not at capture.** Capturing a hold is exempt: the whole value
+of a hold is that the reserved money cannot be taken away in between, and a guarantee a later limit
+can revoke is not a guarantee. That exemption would be a way round the ceiling if placing a hold
+went unchecked, so the check moves there, counting today's outstanding holds alongside today's
+settled debits. One case is left open deliberately — a hold placed on one day and captured on the
+next consumes the capture day's allowance without having been checked against it. The alternatives
+are refusing captures or reserving allowance across days, and both are worse.
 
 ### Authorisation holds
 
@@ -689,6 +720,8 @@ as REST, passed as `authorization` metadata.
 | `ALREADY_REVERSED` | 409 | That transaction has already been reversed |
 | `HOLD_NOT_ACTIVE` | 409 | That hold was already captured, released or expired |
 | `INSUFFICIENT_FUNDS` | 422 | Available balance, including overdraft, is too low |
+| `TRANSACTION_LIMIT_EXCEEDED` | 422 | One posting exceeded the per-transaction ceiling |
+| `DAILY_LIMIT_EXCEEDED` | 422 | The account's daily debit allowance is spent; the message says how much remains |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
@@ -757,6 +790,8 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | Where spans are exported to (Tempo, or any OTLP/HTTP collector) |
 | `COREBANK_OPENSEARCH_URI` | `http://localhost:9200` | Search index; an outage degrades `/api/v1/search/**` to `503`, nothing else |
 | `COREBANK_GRPC_PORT` | `9091` | gRPC listener; 9091 rather than 9090, which Prometheus owns |
+| `COREBANK_DAILY_DEBIT_LIMIT` | `200000.00` | Per account, per UTC calendar day, across withdrawals and outgoing transfers |
+| `COREBANK_SINGLE_TRANSACTION_LIMIT` | `100000.00` | One posting's ceiling |
 | `COREBANK_HOLD_SWEEP_ENABLED` | `true` | Set `false` to keep the hold-expiry sweep out of a replica. Housekeeping only — a capture past the expiry instant is refused whether or not the sweep has run |
 | `COREBANK_SCHEDULED_TRANSFERS_ENABLED` | `true` | Set `false` to keep the standing-instruction runner out of a replica entirely. Safe on any number of replicas when left on -- the claim is `SKIP LOCKED` and each occurrence carries a derived idempotency key |
 | `SERVER_PORT` | `8080` | |

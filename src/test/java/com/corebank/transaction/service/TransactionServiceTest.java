@@ -74,6 +74,12 @@ class TransactionServiceTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    // Mocked to a no-op: these tests are about which legs a posting produces, not about velocity
+    // controls. VelocityLimitsTest and HoldCaptureLimitExemptionTest cover those against a real
+    // ledger, which is the only place the day's total can actually be accumulated.
+    @Mock
+    private VelocityLimits velocityLimits;
+
     // A real registry, not a mock: MeterRegistry.counter/summary return live meters that
     // increment() and record() call directly, which a bare mock would just return null for.
     @Spy

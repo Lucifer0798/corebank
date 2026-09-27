@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -74,6 +75,16 @@ class CoreBankApiIntegrationTest {
     private static RequestPostProcessor customer(String subject) {
         return jwt().jwt(builder -> builder.subject(subject))
                 .authorities(new SimpleGrantedAuthority("ROLE_CUSTOMER"));
+    }
+
+    /**
+     * Today as the application sees it. ScheduledTransferService compares a start date against
+     * {@code LocalDate.now(clock)} on a UTC clock, so a test using the local date disagrees with it
+     * for the hours when the two are different days -- which in IST is every run before 05:30. That
+     * made "a schedule cannot start before today" pass all afternoon and fail at dawn.
+     */
+    private static LocalDate utcToday() {
+        return LocalDate.now(Clock.systemUTC());
     }
 
     @Test
@@ -685,7 +696,7 @@ class CoreBankApiIntegrationTest {
     @Order(33)
     @DisplayName("a teller can set up a standing instruction, and the owner can see it")
     void scheduledTransfersCanBeSetUp() throws Exception {
-        String today = LocalDate.now().toString();
+        String today = utcToday().toString();
 
         String created = mockMvc.perform(post("/api/v1/scheduled-transfers").with(teller())
                         .contentType(JSON).content("""
@@ -735,8 +746,8 @@ class CoreBankApiIntegrationTest {
     @Order(34)
     @DisplayName("a schedule that could never run sensibly is refused at creation")
     void impossibleSchedulesAreRefused() throws Exception {
-        String yesterday = LocalDate.now().minusDays(1).toString();
-        String today = LocalDate.now().toString();
+        String yesterday = utcToday().minusDays(1).toString();
+        String today = utcToday().toString();
 
         // Backdating would fire immediately and then keep firing until it caught up -- posting a
         // year of a monthly instruction in one afternoon.
@@ -870,6 +881,40 @@ class CoreBankApiIntegrationTest {
         mockMvc.perform(get("/api/v1/holds/{reference}", "HLD-does-not-exist").with(teller()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+    }
+
+    @Test
+    @Order(38)
+    @DisplayName("a posting over the per-transaction ceiling is refused as a limit, not as a shortage")
+    void velocityLimitsRefusePostings() throws Exception {
+        // The configured ceiling for this suite is deliberately enormous so unrelated tests never
+        // trip it, which leaves one thing worth asserting over HTTP: that a limit refusal reaches
+        // the client as its own code rather than being mistaken for insufficient funds. The
+        // boundaries themselves are covered in VelocityLimitsTest, which builds small limits.
+        mockMvc.perform(post("/api/v1/accounts/{id}/withdrawals", savingsId).with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"amount":999999999999.00,"currency":"INR"}"""))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("TRANSACTION_LIMIT_EXCEEDED"))
+                // A caller told INSUFFICIENT_FUNDS would go and check a balance that was never the
+                // problem, so the two must stay distinguishable.
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("single posting")));
+
+        mockMvc.perform(post("/api/v1/transfers").with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"sourceAccountId":"%s","destinationAccountId":"%s","amount":999999999999.00}"""
+                        .formatted(savingsId, currentId)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("TRANSACTION_LIMIT_EXCEEDED"));
+
+        // And a deposit is not limited: money arriving is not a velocity concern.
+        mockMvc.perform(post("/api/v1/accounts/{id}/deposits", savingsId).with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"amount":150000.00,"currency":"INR"}"""))
+                .andExpect(status().isCreated());
     }
 
     // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web

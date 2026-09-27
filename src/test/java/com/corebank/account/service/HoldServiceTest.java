@@ -18,6 +18,7 @@ import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.service.CustomerService;
 import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.service.TransactionService;
+import com.corebank.transaction.service.VelocityLimits;
 import com.corebank.transaction.service.ReferenceGenerator;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
@@ -62,6 +63,9 @@ class HoldServiceTest {
 
     @Autowired
     private ReferenceGenerator referenceGenerator;
+
+    @Autowired
+    private VelocityLimits velocityLimits;
 
     @Autowired
     private MeterRegistry meterRegistry;
@@ -118,7 +122,8 @@ class HoldServiceTest {
 
     private HoldService serviceDaysFromNow(int days) {
         return new HoldService(holds, accountService, transactionService, referenceGenerator,
-                meterRegistry, Clock.fixed(Instant.now().plus(Duration.ofDays(days)), ZoneOffset.UTC));
+                velocityLimits, meterRegistry,
+                Clock.fixed(Instant.now().plus(Duration.ofDays(days)), ZoneOffset.UTC));
     }
 
     @Test

@@ -14,6 +14,7 @@ import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.service.ReferenceGenerator;
 import com.corebank.transaction.service.TransactionService;
+import com.corebank.transaction.service.VelocityLimits;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -51,6 +52,7 @@ public class HoldService {
     private final AccountService accountService;
     private final TransactionService transactionService;
     private final ReferenceGenerator referenceGenerator;
+    private final VelocityLimits velocityLimits;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
@@ -58,12 +60,14 @@ public class HoldService {
                        AccountService accountService,
                        TransactionService transactionService,
                        ReferenceGenerator referenceGenerator,
+                       VelocityLimits velocityLimits,
                        MeterRegistry meterRegistry,
                        Clock clock) {
         this.holds = holds;
         this.accountService = accountService;
         this.transactionService = transactionService;
         this.referenceGenerator = referenceGenerator;
+        this.velocityLimits = velocityLimits;
         this.meterRegistry = meterRegistry;
         this.clock = clock;
     }
@@ -79,6 +83,15 @@ public class HoldService {
                     "General-ledger accounts cannot be used through this endpoint");
         }
         account.assertCurrency(currency);
+
+        // The velocity check belongs here rather than at capture. A capture is exempt -- refusing
+        // one would undo the guarantee the hold exists for -- so if authorisation went unchecked,
+        // holds would be a way around the daily ceiling entirely. Today's other outstanding holds
+        // count alongside today's settled debits.
+        Instant[] today = velocityLimits.todayBounds();
+        velocityLimits.assertWithin(accountId, amount,
+                holds.sumOutstandingPlacedBetween(accountId, today[0], today[1]));
+
         // Throws InsufficientFundsException when the available balance -- already net of other
         // outstanding holds -- will not cover it.
         account.placeHold(amount);
@@ -128,7 +141,10 @@ public class HoldService {
         TransactionResponse posting = transactionService.withdraw(
                 account.getId(),
                 new AmountRequest(amount, hold.getCurrency(), captureDescription(hold)),
-                hold.getReference());
+                hold.getReference(),
+                // The velocity limit was applied when the hold was placed. Applying it again here
+                // could refuse a capture the hold exists to guarantee.
+                false);
 
         hold.settle(HoldStatus.CAPTURED, now, posting.reference());
         count("captured");
