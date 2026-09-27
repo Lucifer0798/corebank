@@ -174,6 +174,12 @@ corebank:
     # Set false to keep the runner out of a context entirely, the way relay-enabled does for the
     # outbox. ScheduledTransferRunner reads this through @ConditionalOnProperty.
     enabled: ${COREBANK_SCHEDULED_TRANSFERS_ENABLED:true}
+  holds:
+    # Expiring a hold only gives the customer their available balance back -- a capture past the
+    # expiry instant is already refused by AccountHold.assertCapturable, whether or not this has
+    # run -- so a slow interval is fine.
+    sweep-interval: 5m
+    sweep-enabled: ${COREBANK_HOLD_SWEEP_ENABLED:true}
 
 logging:
   level:

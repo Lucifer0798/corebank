@@ -67,6 +67,12 @@ corebank:
     # business running underneath every unrelated test in this suite. ScheduledTransferRunnerIT
     # drives the runner by calling run() directly, which needs no schedule at all.
     enabled: false
+  holds:
+    # Off for the same reason the other two pollers are: a background sweep that mutates account
+    # balances has no business running underneath unrelated tests. HoldServiceTest drives expiry
+    # by calling the service directly, which needs no schedule.
+    sweep-enabled: false
+    sweep-interval: 5m
 
 spring.grpc:
   server:

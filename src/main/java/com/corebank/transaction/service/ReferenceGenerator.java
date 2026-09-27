@@ -27,10 +27,19 @@ public class ReferenceGenerator {
     }
 
     public String next() {
+        return next("TXN");
+    }
+
+    /**
+     * The same shape under a different prefix, so an authorisation hold reads as {@code HLD-...}
+     * rather than borrowing the transaction vocabulary for something that is not a posting. The
+     * alphabet and the length are what matter about this generator, and both are shared.
+     */
+    public String next(String prefix) {
         StringBuilder suffix = new StringBuilder(SUFFIX_LENGTH);
         for (int i = 0; i < SUFFIX_LENGTH; i++) {
             suffix.append(ALPHABET[random.nextInt(ALPHABET.length)]);
         }
-        return "TXN-" + LocalDate.now(clock).format(DATE) + "-" + suffix;
+        return prefix + "-" + LocalDate.now(clock).format(DATE) + "-" + suffix;
     }
 }
