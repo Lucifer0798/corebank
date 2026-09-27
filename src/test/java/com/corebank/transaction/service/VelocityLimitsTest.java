@@ -211,10 +211,10 @@ class VelocityLimitsTest {
     @Test
     @DisplayName("capturing a hold is never refused by the limit")
     void capturingIsExemptFromTheLimit() {
-        // The interaction that matters most, and the one most easily broken by adding a check in
-        // the obvious place: a hold's whole value is that the money cannot be taken away in
-        // between. The configured suite limits are huge, so this asserts the code path rather than
-        // the boundary -- the exemption itself is what the deliberate break in the PR proves.
+        // Only that the path works end to end. This cannot prove the exemption, because the suite's
+        // configured limits are large enough that a small capture passes whether or not the check
+        // runs -- removing the exemption leaves this test green. HoldCaptureLimitExemptionTest
+        // proves it properly, with its own small limits.
         var hold = holdService.place(accountId,
                 new PlaceHoldRequest(new BigDecimal("500.00"), "INR", "Hotel", null));
 
