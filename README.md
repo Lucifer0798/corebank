@@ -28,6 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
+| Holds | Authorisation holds reserve money without posting it. Captured, released, or expired by a sweep. |
 | Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner, set up and cancelled from the account page. |
 | Reversals | An admin can undo a posting. The correction is its own transaction with mirrored legs -- nothing is edited or erased. |
 | Idempotency | Every money-moving `POST` requires an `Idempotency-Key`. Retries never post twice. |
@@ -302,6 +303,37 @@ correction is not new lending; refusing one because the customer has since spent
 would leave the ledger permanently wrong about a movement that should never have happened.
 A reversal is **not** itself reversible: correcting a mistaken reversal means posting the
 original movement again, not stacking a second correction on the first.
+
+### Authorisation holds
+
+`availableBalance` used to be `balance + overdraft`, which a bank can only quote honestly if
+nothing is ever pending. A card authorised at hotel check-in reserved nothing, so the same money
+could be spent again before the hotel captured it — and the posting finally refused would be the
+one the bank had already guaranteed.
+
+A hold is **not a ledger entry**. Nothing has happened to the bank's position — the customer still
+owns the money and the bank still owes it — so posting one would record a movement that never
+occurred. It reserves the amount against `availableBalance` instead, and only a capture becomes a
+transaction. Holds compound, so a second authorisation sees the first one's money as already gone.
+
+The reserved total is denormalised onto `account.held_amount` rather than summed from the hold
+table on every read. Every path that moves money already row-locks the account, so keeping the
+running total there is atomic for free; summing instead would put a second query in the hot
+posting path. `AccountHoldRepository.sumOutstandingFor` exists purely so a test can prove the
+denormalised figure never drifted from the holds behind it.
+
+**Capture frees the reservation before it posts**, and the order is the point. A capture for the
+held amount or less is then guaranteed to succeed, because the money it needs is exactly the money
+reserved for it — nothing that happened in between can make it fail. A capture for *more* (a tip
+added after the pre-authorisation) finds only the excess competing with the ordinary available
+balance, and since the whole thing is one transaction, a refusal rolls the release back and leaves
+the hold intact.
+
+Expiry is checked against the clock, not against a status column. The sweep that marks holds
+`EXPIRED` runs on an interval, so there is always a window where a hold is over but still `ACTIVE`
+in the database; a capture arriving then is refused on the clock rather than honoured because a
+background job happened not to have run. The sweep only gives the customer their available balance
+back, which is why it can afford to be slow.
 
 ### Scheduled transfers
 
@@ -603,6 +635,11 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/accounts/{id}/deposits` | TELLER, ADMIN | Deposit — needs `Idempotency-Key` |
 | `POST` | `/api/v1/accounts/{id}/withdrawals` | TELLER, ADMIN | Withdraw — needs `Idempotency-Key` |
 | `POST` | `/api/v1/transfers` | TELLER, ADMIN | Transfer — needs `Idempotency-Key` |
+| `POST` | `/api/v1/accounts/{id}/holds` | TELLER, ADMIN | Place an authorisation hold — needs `Idempotency-Key` |
+| `POST` | `/api/v1/holds/{reference}/capture` | TELLER, ADMIN | Turn it into a posting — needs `Idempotency-Key` |
+| `POST` | `/api/v1/holds/{reference}/release` | TELLER, ADMIN | Give up the reservation |
+| `GET` | `/api/v1/holds/{reference}` | TELLER, ADMIN | One hold and what became of it |
+| `GET` | `/api/v1/accounts/{id}/holds` | owner, staff | Holds against one account, newest first |
 | `POST` | `/api/v1/scheduled-transfers` | TELLER, ADMIN | Set up a standing instruction |
 | `GET` | `/api/v1/scheduled-transfers/{id}` | TELLER, ADMIN | One instruction, and how it has fared |
 | `GET` | `/api/v1/accounts/{id}/scheduled-transfers` | owner, staff | Instructions against one account, both directions |
@@ -650,6 +687,7 @@ as REST, passed as `authorization` metadata.
 | `EMAIL_TAKEN` | 409 | A customer with that email already exists |
 | `IDENTITY_ALREADY_LINKED` | 409 | That Keycloak identity is linked to a different customer |
 | `ALREADY_REVERSED` | 409 | That transaction has already been reversed |
+| `HOLD_NOT_ACTIVE` | 409 | That hold was already captured, released or expired |
 | `INSUFFICIENT_FUNDS` | 422 | Available balance, including overdraft, is too low |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
@@ -662,6 +700,7 @@ as REST, passed as `authorization` metadata.
 | `BALANCE_NOT_ZERO` | 422 | An account must be emptied before it is closed |
 | `INTERNAL_ACCOUNT` | 422 | General-ledger accounts are not addressable here |
 | `REVERSAL_NOT_REVERSIBLE` | 422 | A reversal cannot itself be reversed |
+| `HOLD_EXPIRED` | 422 | The hold is past its expiry and can no longer be captured |
 | `INVALID_REPLAY_WINDOW` | 422 | An outbox replay's `until` is not after its `since` |
 
 ---
@@ -718,6 +757,7 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | Where spans are exported to (Tempo, or any OTLP/HTTP collector) |
 | `COREBANK_OPENSEARCH_URI` | `http://localhost:9200` | Search index; an outage degrades `/api/v1/search/**` to `503`, nothing else |
 | `COREBANK_GRPC_PORT` | `9091` | gRPC listener; 9091 rather than 9090, which Prometheus owns |
+| `COREBANK_HOLD_SWEEP_ENABLED` | `true` | Set `false` to keep the hold-expiry sweep out of a replica. Housekeeping only — a capture past the expiry instant is refused whether or not the sweep has run |
 | `COREBANK_SCHEDULED_TRANSFERS_ENABLED` | `true` | Set `false` to keep the standing-instruction runner out of a replica entirely. Safe on any number of replicas when left on -- the claim is `SKIP LOCKED` and each occurrence carries a derived idempotency key |
 | `SERVER_PORT` | `8080` | |
 

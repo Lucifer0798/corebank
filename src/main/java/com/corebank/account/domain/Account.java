@@ -77,9 +77,57 @@ public class Account extends AuditableEntity {
     @Column(name = "closed_at")
     private Instant closedAt;
 
-    /** How much can still be withdrawn: the balance plus any agreed overdraft. */
+    /**
+     * Money reserved by authorisation holds that have not yet been captured or released.
+     *
+     * <p>Denormalised onto the account rather than summed from the hold table on every read, and
+     * that is a deliberate trade. Every path that moves money already row-locks this account, so
+     * keeping the running total here is atomic for free and costs one column; summing the holds
+     * instead would mean a second query inside the hot posting path, and a read that could race
+     * with a hold being placed between the two statements.
+     */
+    @Column(name = "held_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal heldAmount = Money.ZERO;
+
+    /**
+     * How much can still be withdrawn: the balance, plus any agreed overdraft, minus whatever is
+     * already promised to an outstanding authorisation.
+     *
+     * <p>The third term is what makes this figure honest. Without it a customer whose card was
+     * authorised for a hotel at check-in could spend the same money again before the hotel
+     * captured it, and the posting that finally arrived would be the one refused -- for a
+     * purchase the bank had already guaranteed.
+     */
     public BigDecimal availableBalance() {
-        return Money.normalize(balance.add(overdraftLimit));
+        return Money.normalize(balance.add(overdraftLimit).subtract(heldAmount));
+    }
+
+    /**
+     * Reserves {@code amount} against this account.
+     *
+     * <p>Checked against {@link #availableBalance()}, so holds compound: two authorisations for
+     * 60 on a balance of 100 means the second is refused, not that both are honoured and the
+     * account goes short when they are captured.
+     */
+    public void placeHold(BigDecimal amount) {
+        assertPostable();
+        if (availableBalance().compareTo(amount) < 0) {
+            throw new InsufficientFundsException(accountNumber, availableBalance(), amount);
+        }
+        this.heldAmount = Money.normalize(heldAmount.add(amount));
+    }
+
+    /** Frees a reservation, whether it was captured, released or simply expired. */
+    public void freeHold(BigDecimal amount) {
+        BigDecimal remaining = Money.normalize(heldAmount.subtract(amount));
+        // A negative total would mean a hold was freed twice, and would silently inflate the
+        // available balance from then on. Fail loudly instead of carrying the error forward.
+        if (remaining.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalStateException(
+                    "Releasing " + amount + " would take account " + accountNumber
+                            + " below zero held (currently " + heldAmount + ")");
+        }
+        this.heldAmount = remaining;
     }
 
     public boolean isCustomerAccount() {
@@ -115,9 +163,11 @@ public class Account extends AuditableEntity {
         BigDecimal updated = Money.normalize(balance.add(signed));
 
         // Internal general-ledger accounts are allowed to run negative -- the bank funds them.
-        // Customer accounts may only go as far negative as their agreed overdraft.
+        // Customer accounts may only go as far negative as their agreed overdraft, less whatever
+        // is already reserved: without subtracting heldAmount here a plain withdrawal could spend
+        // money an outstanding authorisation had already promised, and holds would be decorative.
         if (!allowOverdraw && isCustomerAccount()
-                && updated.add(overdraftLimit).compareTo(BigDecimal.ZERO) < 0) {
+                && updated.add(overdraftLimit).subtract(heldAmount).compareTo(BigDecimal.ZERO) < 0) {
             throw new InsufficientFundsException(accountNumber, availableBalance(), amount);
         }
         this.balance = updated;

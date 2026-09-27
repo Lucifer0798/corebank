@@ -64,6 +64,17 @@ export function AccountDetailPage() {
               {formatAmount(balance?.availableBalance ?? account.availableBalance, account.currency)}
             </div>
           </div>
+          {/* Only when there is something to explain. The gap between balance and available is
+              otherwise unaccountable to anyone looking at the page, which is exactly the
+              complaint authorisation holds generate at every bank that hides them. */}
+          {(balance?.heldAmount ?? account.heldAmount) > 0 && (
+            <div className="stat">
+              <div className="stat__label">On hold</div>
+              <div className="stat__value">
+                {formatAmount(balance?.heldAmount ?? account.heldAmount, account.currency)}
+              </div>
+            </div>
+          )}
           {account.overdraftLimit > 0 && (
             <div className="stat">
               <div className="stat__label">Overdraft limit</div>
