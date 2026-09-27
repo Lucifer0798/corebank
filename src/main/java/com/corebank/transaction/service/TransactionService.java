@@ -46,19 +46,22 @@ public class TransactionService {
     private final ReferenceGenerator referenceGenerator;
     private final ApplicationEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
+    private final VelocityLimits velocityLimits;
 
     public TransactionService(BankTransactionRepository transactions,
                               LedgerEntryRepository entries,
                               AccountService accountService,
                               ReferenceGenerator referenceGenerator,
                               ApplicationEventPublisher eventPublisher,
-                              MeterRegistry meterRegistry) {
+                              MeterRegistry meterRegistry,
+                              VelocityLimits velocityLimits) {
         this.transactions = transactions;
         this.entries = entries;
         this.accountService = accountService;
         this.referenceGenerator = referenceGenerator;
         this.eventPublisher = eventPublisher;
         this.meterRegistry = meterRegistry;
+        this.velocityLimits = velocityLimits;
     }
 
     /** Cash in at the counter: the bank holds more cash, and owes the customer more. */
@@ -81,8 +84,28 @@ public class TransactionService {
     /** Cash out at the counter: the customer claim falls, and so does the cash position. */
     @Transactional
     public TransactionResponse withdraw(UUID accountId, AmountRequest request, String idempotencyKey) {
+        return withdraw(accountId, request, idempotencyKey, true);
+    }
+
+    /**
+     * As above, but {@code enforceVelocityLimit} false skips the daily and per-posting ceilings.
+     *
+     * <p>Exactly one caller passes false: capturing an authorisation hold. The limit was already
+     * checked when the hold was placed, and the whole value of a hold is that the money reserved
+     * for it cannot be taken away in between -- refusing the capture on a limit would undo that
+     * guarantee for a purchase the bank had already promised to honour. The posting still counts
+     * towards the day's total afterwards, because the money did leave; it simply is not the thing
+     * the check is applied to.
+     */
+    @Transactional
+    public TransactionResponse withdraw(UUID accountId, AmountRequest request, String idempotencyKey,
+                                        boolean enforceVelocityLimit) {
         BigDecimal amount = Money.normalize(request.amount());
         String currency = currencyOf(request.currency());
+
+        if (enforceVelocityLimit) {
+            velocityLimits.assertWithin(accountId, amount);
+        }
 
         Account account = customerAccountForUpdate(accountId, currency);
         Account cash = accountService.cashAccount();
@@ -106,6 +129,11 @@ public class TransactionService {
         }
         BigDecimal amount = Money.normalize(request.amount());
         String currency = currencyOf(request.currency());
+
+        // Checked against the paying side only. The money leaving is what a velocity control is
+        // about; an account receiving an unusual amount is a different concern with different
+        // rules, and applying this one to it would refuse a customer their own salary.
+        velocityLimits.assertWithin(request.sourceAccountId(), amount);
 
         // Take both row locks in a stable order regardless of transfer direction, so that a
         // simultaneous transfer the other way waits rather than deadlocking.

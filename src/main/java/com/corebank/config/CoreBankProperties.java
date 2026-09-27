@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -19,7 +20,8 @@ public record CoreBankProperties(
         @Valid @NotNull Web web,
         @Valid @NotNull Search search,
         @Valid @NotNull Outbox outbox,
-        @Valid @NotNull ScheduledTransfers scheduledTransfers) {
+        @Valid @NotNull ScheduledTransfers scheduledTransfers,
+        @Valid @NotNull Limits limits) {
 
     public record Ledger(
             @NotBlank String cashAccountNumber,
@@ -71,5 +73,22 @@ public record CoreBankProperties(
     public record ScheduledTransfers(
             @Positive int batchSize,
             @Positive int maxConsecutiveFailures) {
+    }
+
+    /**
+     * Velocity controls: how much may leave one account, and how fast.
+     *
+     * <p>Both are per <em>account</em> rather than per customer, which is the narrower and more
+     * conservative reading -- a customer holding several accounts gets the limit on each. Tying it
+     * to the customer would be the stricter control and is a deliberate non-goal here: it would
+     * mean every posting locking or summing across an unbounded set of sibling accounts.
+     *
+     * <p>{@code dailyDebitLimit} counts a UTC calendar day. Not a rolling 24 hours, which sounds
+     * fairer and is worse: a rolling window means a customer refused at 23:00 cannot be told when
+     * they may try again without the bank replaying their own history at them.
+     */
+    public record Limits(
+            @NotNull @Positive BigDecimal dailyDebitLimit,
+            @NotNull @Positive BigDecimal singleTransactionLimit) {
     }
 }

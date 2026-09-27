@@ -180,6 +180,13 @@ corebank:
     # run -- so a slow interval is fine.
     sweep-interval: 5m
     sweep-enabled: ${COREBANK_HOLD_SWEEP_ENABLED:true}
+  limits:
+    # Per account, per UTC calendar day, across withdrawals and outgoing transfers. Counted from
+    # the ledger rather than a counter column -- see VelocityLimits for why.
+    daily-debit-limit: ${COREBANK_DAILY_DEBIT_LIMIT:200000.00}
+    # One posting's ceiling, checked before the daily total. A single fat-fingered transfer is a
+    # different failure from a day of steady spending, and the two deserve different messages.
+    single-transaction-limit: ${COREBANK_SINGLE_TRANSACTION_LIMIT:100000.00}
 
 logging:
   level:

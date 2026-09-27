@@ -73,6 +73,13 @@ corebank:
     # by calling the service directly, which needs no schedule.
     sweep-enabled: false
     sweep-interval: 5m
+  limits:
+    # Deliberately generous here: this suite's other tests move money freely and must not start
+    # failing on a limit they never asked about. VelocityLimitsTest builds its own properties with
+    # small numbers instead, which is also the only way to test the boundary without moving
+    # hundreds of thousands of rupees through H2 to reach it.
+    daily-debit-limit: 100000000.00
+    single-transaction-limit: 100000000.00
 
 spring.grpc:
   server:

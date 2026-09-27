@@ -15,7 +15,7 @@ import com.corebank.account.dto.OpenAccountRequest;
 import com.corebank.account.repository.AccountRepository;
 import com.corebank.common.SequenceNumberGenerator;
 import com.corebank.common.exception.BusinessRuleException;
-import com.corebank.config.CoreBankProperties;
+import com.corebank.config.TestProperties;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.domain.CustomerStatus;
 import com.corebank.customer.domain.KycStatus;
@@ -60,11 +60,7 @@ class AccountServiceTest {
 
     @BeforeEach
     void setUp() {
-        CoreBankProperties properties = new CoreBankProperties(
-                new CoreBankProperties.Ledger("GL0000000001", "GL0000000002"),
-                new CoreBankProperties.AccountSettings("1001"),
-                null, null, null, null);
-        accountService = new AccountService(accounts, customerService, sequences, properties);
+        accountService = new AccountService(accounts, customerService, sequences, TestProperties.defaults());
 
         customer = new Customer();
         customer.setId(UUID.randomUUID());
