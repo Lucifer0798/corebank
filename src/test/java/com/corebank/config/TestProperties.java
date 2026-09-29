@@ -33,14 +33,23 @@ public final class TestProperties {
                 new CoreBankProperties.Outbox(50, Duration.ofSeconds(3)),
                 new CoreBankProperties.ScheduledTransfers(50, 3),
                 // High enough that a test not about limits never trips one by accident.
-                new CoreBankProperties.Limits(new BigDecimal("1000000.00"), new BigDecimal("1000000.00")));
+                new CoreBankProperties.Limits(new BigDecimal("1000000.00"), new BigDecimal("1000000.00")),
+                new CoreBankProperties.Interest(new BigDecimal("0.0350"), 365));
     }
 
     /** {@link #defaults()} with the outbox section replaced. */
     public static CoreBankProperties withOutbox(CoreBankProperties.Outbox outbox) {
         CoreBankProperties base = defaults();
         return new CoreBankProperties(base.ledger(), base.account(), base.web(), base.search(),
-                outbox, base.scheduledTransfers(), base.limits());
+                outbox, base.scheduledTransfers(), base.limits(), base.interest());
+    }
+
+    /** {@link #defaults()} with the interest settings replaced. */
+    public static CoreBankProperties withInterest(String annualRate, int dayCountBasis) {
+        CoreBankProperties base = defaults();
+        return new CoreBankProperties(base.ledger(), base.account(), base.web(), base.search(),
+                base.outbox(), base.scheduledTransfers(), base.limits(),
+                new CoreBankProperties.Interest(new BigDecimal(annualRate), dayCountBasis));
     }
 
     /** {@link #defaults()} with the velocity limits replaced -- the point of most limit tests. */
@@ -49,6 +58,7 @@ public final class TestProperties {
         return new CoreBankProperties(base.ledger(), base.account(), base.web(), base.search(),
                 base.outbox(), base.scheduledTransfers(),
                 new CoreBankProperties.Limits(
-                        new BigDecimal(dailyDebitLimit), new BigDecimal(singleTransactionLimit)));
+                        new BigDecimal(dailyDebitLimit), new BigDecimal(singleTransactionLimit)),
+                base.interest());
     }
 }

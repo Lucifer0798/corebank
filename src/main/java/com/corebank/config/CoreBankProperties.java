@@ -21,7 +21,8 @@ public record CoreBankProperties(
         @Valid @NotNull Search search,
         @Valid @NotNull Outbox outbox,
         @Valid @NotNull ScheduledTransfers scheduledTransfers,
-        @Valid @NotNull Limits limits) {
+        @Valid @NotNull Limits limits,
+        @Valid @NotNull Interest interest) {
 
     public record Ledger(
             @NotBlank String cashAccountNumber,
@@ -90,5 +91,19 @@ public record CoreBankProperties(
     public record Limits(
             @NotNull @Positive BigDecimal dailyDebitLimit,
             @NotNull @Positive BigDecimal singleTransactionLimit) {
+    }
+
+    /**
+     * Interest on savings balances.
+     *
+     * <p>{@code dayCountBasis} is the denominator a daily rate is derived from, and it is a policy
+     * choice rather than a fact: 365 ignores leap years and slightly under-pays in one year out of
+     * four, 360 is the old money-market convention and over-pays every year. It is configurable
+     * because the right answer depends on the product, and named rather than hardcoded so that
+     * whoever changes it can see what they are changing.
+     */
+    public record Interest(
+            @NotNull BigDecimal savingsAnnualRate,
+            @Positive int dayCountBasis) {
     }
 }

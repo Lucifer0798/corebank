@@ -24,6 +24,12 @@ public record AccountResponse(
         BigDecimal heldAmount,
 
         BigDecimal overdraftLimit,
+
+        @io.swagger.v3.oas.annotations.media.Schema(
+                description = "Interest earned but not yet paid. Carried at four decimal places, and "
+                        + "not part of the balance until it is capitalised.")
+        BigDecimal accruedInterest,
+
         AccountStatus status,
         Instant openedAt,
         Instant closedAt) {
@@ -39,6 +45,9 @@ public record AccountResponse(
                 account.availableBalance(),
                 Money.normalize(account.getHeldAmount()),
                 Money.normalize(account.getOverdraftLimit()),
+                // Not normalised to two places: the whole point of the column is the fraction a
+                // customer has earned but cannot spend yet, and rounding it here would hide it.
+                account.getAccruedInterest(),
                 account.getStatus(),
                 account.getOpenedAt(),
                 account.getClosedAt());

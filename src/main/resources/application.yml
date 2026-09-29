@@ -187,6 +187,17 @@ corebank:
     # One posting's ceiling, checked before the daily total. A single fat-fingered transfer is a
     # different failure from a day of steady spending, and the two deserve different messages.
     single-transaction-limit: ${COREBANK_SINGLE_TRANSACTION_LIMIT:100000.00}
+  interest:
+    # Annual rate on savings balances, as a fraction. 3.5% by default.
+    savings-annual-rate: ${COREBANK_SAVINGS_ANNUAL_RATE:0.0350}
+    # The denominator a daily rate is derived from -- a policy choice, not a fact. See
+    # CoreBankProperties.Interest.
+    day-count-basis: ${COREBANK_DAY_COUNT_BASIS:365}
+    # Hourly rather than daily: an account is refused a day it has already been accrued for, so
+    # the extra ticks only pick up accounts opened since the last one and finish oversized
+    # batches. A once-a-day schedule would make a restart at the wrong moment cost a day.
+    accrual-interval: 1h
+    enabled: ${COREBANK_INTEREST_ENABLED:true}
 
 logging:
   level:

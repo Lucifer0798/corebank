@@ -42,6 +42,8 @@ export interface Account {
   /** Reserved by outstanding authorisation holds; already subtracted from availableBalance. */
   heldAmount: number;
   overdraftLimit: number;
+  /** Interest earned but not yet paid; not part of the balance until capitalised. */
+  accruedInterest: number;
   status: AccountStatus;
   openedAt: string;
   closedAt: string | null;
