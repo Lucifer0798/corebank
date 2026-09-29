@@ -75,6 +75,14 @@ export function AccountDetailPage() {
               </div>
             </div>
           )}
+          {account.accruedInterest > 0 && (
+            <div className="stat">
+              <div className="stat__label">Interest accrued</div>
+              {/* Shown to four places on purpose. Rounded to two it reads as 0.00 for weeks on an
+                  ordinary balance, which looks like a broken feature rather than a small number. */}
+              <div className="stat__value">{account.accruedInterest.toFixed(4)}</div>
+            </div>
+          )}
           {account.overdraftLimit > 0 && (
             <div className="stat">
               <div className="stat__label">Overdraft limit</div>

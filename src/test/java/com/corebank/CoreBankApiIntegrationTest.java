@@ -917,6 +917,30 @@ class CoreBankApiIntegrationTest {
                 .andExpect(status().isCreated());
     }
 
+    @Test
+    @Order(39)
+    @DisplayName("accrued interest is visible on the account without being part of the balance")
+    void accruedInterestIsVisible() throws Exception {
+        // The runner is disabled in this suite, so nothing has accrued and the figure is zero.
+        // What this checks is that the field reaches the client at all, and at full scale -- a DTO
+        // that rounded it to two places would report 0.00 for weeks on an ordinary balance and
+        // read as a broken feature rather than a small number.
+        mockMvc.perform(get("/api/v1/accounts/{id}", savingsId).with(teller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accruedInterest").exists())
+                .andExpect(jsonPath("$.accruedInterest").value(0.0));
+
+        // The interest-expense general ledger account exists and, like the others, is not
+        // addressable through the customer endpoints.
+        mockMvc.perform(post("/api/v1/accounts/{id}/deposits", "00000000-0000-0000-0000-000000000003")
+                        .with(teller())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(JSON).content("""
+                        {"amount":10.00}"""))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ACCOUNT"));
+    }
+
     // Deliberately not testing GET /actuator/prometheus here: @SpringBootTest's MOCK web
     // environment (what @AutoConfigureMockMvc drives) does not register the actuator endpoint
     // mapping the way a real embedded servlet container does, so a MockMvc request to any

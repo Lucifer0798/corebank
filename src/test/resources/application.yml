@@ -80,6 +80,13 @@ corebank:
     # hundreds of thousands of rupees through H2 to reach it.
     daily-debit-limit: 100000000.00
     single-transaction-limit: 100000000.00
+  interest:
+    savings-annual-rate: 0.0350
+    day-count-basis: 365
+    accrual-interval: 1h
+    # Off, like the other runners: interest credited in the background would make every balance
+    # assertion in this suite depend on when it ran. InterestServiceTest drives it directly.
+    enabled: false
 
 spring.grpc:
   server:

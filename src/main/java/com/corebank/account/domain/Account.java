@@ -15,7 +15,9 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -115,6 +117,62 @@ public class Account extends AuditableEntity {
             throw new InsufficientFundsException(accountNumber, availableBalance(), amount);
         }
         this.heldAmount = Money.normalize(heldAmount.add(amount));
+    }
+
+    /**
+     * Interest earned but not yet paid, carried at full storage scale.
+     *
+     * <p>This is the column the schema's {@code NUMERIC(19,4)} was chosen for. A day's interest on
+     * a few thousand rupees is a fraction of a paisa; held at two decimal places it would round to
+     * nothing every day and the customer would earn nothing at all.
+     */
+    @Column(name = "accrued_interest", nullable = false, precision = 19, scale = 4)
+    private BigDecimal accruedInterest = BigDecimal.ZERO.setScale(4);
+
+    /** The last day this account has been accrued for, so a rerun cannot pay twice. */
+    @Column(name = "interest_accrued_through")
+    private LocalDate interestAccruedThrough;
+
+    /**
+     * Adds one day's interest, at full scale.
+     *
+     * <p>Idempotent by date rather than by trust: an accrual run that crashes and restarts, or two
+     * replicas ticking at once, would otherwise credit the same day twice. Returns whether anything
+     * was added, so the caller can tell a real accrual from a repeat.
+     */
+    public boolean accrueInterestFor(LocalDate day, BigDecimal amount) {
+        if (interestAccruedThrough != null && !day.isAfter(interestAccruedThrough)) {
+            return false;
+        }
+        this.accruedInterest = accruedInterest.add(amount).setScale(4, RoundingMode.HALF_UP);
+        this.interestAccruedThrough = day;
+        return true;
+    }
+
+    /**
+     * How much accrued interest is currently payable, rounded to real money.
+     *
+     * <p>Rounded <em>down</em>, deliberately. Rounding to nearest would pay out fractions the
+     * account has not yet earned, and over a portfolio that is the bank inventing money; rounding
+     * down pays only what is definitely owed and {@link #takeCapitalisableInterest()} leaves the
+     * remainder behind to be paid next time. Nothing is lost either way -- it is carried, not
+     * discarded.
+     */
+    public BigDecimal capitalisableInterest() {
+        return accruedInterest.setScale(Money.SCALE, RoundingMode.DOWN);
+    }
+
+    /**
+     * Removes and returns the payable portion, leaving the sub-paisa remainder accrued.
+     *
+     * <p>Subtracting exactly what was returned, rather than zeroing the field, is the whole point:
+     * zeroing would quietly discard up to a paisa of the customer's money on every capitalisation,
+     * twelve times a year, on every account.
+     */
+    public BigDecimal takeCapitalisableInterest() {
+        BigDecimal payable = capitalisableInterest();
+        this.accruedInterest = accruedInterest.subtract(payable).setScale(4, RoundingMode.HALF_UP);
+        return payable;
     }
 
     /** Frees a reservation, whether it was captured, released or simply expired. */
