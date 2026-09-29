@@ -28,6 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
+| Interest | Savings balances accrue daily at full scale and capitalise monthly as a real posting. |
 | Velocity limits | A per-account daily debit ceiling and a per-posting ceiling, counted from the ledger. |
 | Holds | Authorisation holds reserve money without posting it. Captured, released, or expired by a sweep. |
 | Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner, set up and cancelled from the account page. |
@@ -304,6 +305,39 @@ correction is not new lending; refusing one because the customer has since spent
 would leave the ledger permanently wrong about a movement that should never have happened.
 A reversal is **not** itself reversible: correcting a mistaken reversal means posting the
 original movement again, not stacking a second correction on the first.
+
+### Interest
+
+Savings balances earn interest, accrued daily and capitalised monthly. It is the feature this
+schema's `NUMERIC(19,4)` storage scale was chosen for, and `account.accrued_interest` is the column
+that needs it.
+
+**Accrual is not a posting.** Nothing has moved — the bank owes slightly more than yesterday, but no
+money has changed hands — so writing a ledger entry every night would put 365 lines a year on a
+statement for something the customer cannot yet spend. The amount accumulates on the account and
+becomes a single posting when capitalised.
+
+**The two halves round differently, and that is the whole correctness argument.** Accrual keeps four
+decimal places: a day's interest on ₹10,000 at 3.5% is ₹0.9589, and on ₹100 it is under a paisa. At
+two decimal places the first over-pays by 4% every day and the second rounds to zero forever — a
+small balance would earn nothing at all. Capitalisation rounds **down** to two places and carries
+the remainder, because paying a rounded-up fraction is the bank inventing money and zeroing the
+field is the bank keeping the customer's.
+
+Capitalising is an ordinary balanced posting: the customer is credited and `GL0000000003`, the
+interest-expense account, is debited — an expense with a `DEBIT` normal balance, exactly as cash is.
+The money comes from somewhere, which is what makes it a posting rather than an invention.
+
+Accrual is idempotent per day. `interest_accrued_through` means a crashed run, a restart, or a
+second replica cannot pay the same day twice, which is also why the runner can tick hourly: the
+extra ticks pick up accounts opened since the last one and finish oversized batches, and a
+once-a-day schedule would let a badly timed restart cost a day.
+
+Because capitalised interest joins the balance, the product **compounds** — a year of daily accrual
+on ₹10,000 pays about ₹355.67 rather than the ₹350.00 of simple interest. The test bounds it from
+both sides using arithmetic rather than the implementation: strictly more than simple interest, and
+strictly less than continuous compounding at the same nominal rate (₹356.20), which no compounding
+frequency can exceed.
 
 ### Velocity limits
 
@@ -790,6 +824,9 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | Where spans are exported to (Tempo, or any OTLP/HTTP collector) |
 | `COREBANK_OPENSEARCH_URI` | `http://localhost:9200` | Search index; an outage degrades `/api/v1/search/**` to `503`, nothing else |
 | `COREBANK_GRPC_PORT` | `9091` | gRPC listener; 9091 rather than 9090, which Prometheus owns |
+| `COREBANK_SAVINGS_ANNUAL_RATE` | `0.0350` | Annual rate on savings balances, as a fraction |
+| `COREBANK_DAY_COUNT_BASIS` | `365` | Denominator the daily rate is derived from; a policy choice, not a fact |
+| `COREBANK_INTEREST_ENABLED` | `true` | Set `false` to keep the accrual runner out of a replica |
 | `COREBANK_DAILY_DEBIT_LIMIT` | `200000.00` | Per account, per UTC calendar day, across withdrawals and outgoing transfers |
 | `COREBANK_SINGLE_TRANSACTION_LIMIT` | `100000.00` | One posting's ceiling |
 | `COREBANK_HOLD_SWEEP_ENABLED` | `true` | Set `false` to keep the hold-expiry sweep out of a replica. Housekeeping only — a capture past the expiry instant is refused whether or not the sweep has run |
