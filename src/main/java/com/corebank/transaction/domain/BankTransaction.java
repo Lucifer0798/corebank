@@ -21,6 +21,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -69,6 +71,21 @@ public class BankTransaction {
 
     @Column(name = "posted_at", nullable = false)
     private Instant postedAt;
+
+    /**
+     * The rate applied, on a cross-currency posting only. Eight decimal places because a rate is
+     * not money: rounded to the money scale, a large conversion could not be reproduced from its
+     * own audit trail.
+     */
+    @Column(name = "exchange_rate", precision = 19, scale = 8, updatable = false)
+    private BigDecimal exchangeRate;
+
+    /** What {@code amount} became in the other currency, so a statement need not re-derive it. */
+    @Column(name = "counter_amount", precision = 19, scale = 4, updatable = false)
+    private BigDecimal counterAmount;
+
+    @Column(name = "counter_currency", length = 3, updatable = false)
+    private String counterCurrency;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -169,22 +186,35 @@ public class BankTransaction {
     }
 
     /**
-     * Double-entry invariant: total debits must equal total credits.
+     * Double-entry invariant: debits must equal credits <em>in every currency separately</em>.
      * Checked before the transaction is written so an unbalanced posting can never reach the ledger.
+     *
+     * <p>Per currency, not in total, and the difference only started to matter with FX. A
+     * cross-currency transfer has four legs -- the customer debited in one currency, an FX
+     * position account credited in the same currency, that position debited in the other, the
+     * destination credited in the other -- and summing all four together would balance by pure
+     * coincidence: the two amounts appear once on each side, so any pair of numbers passes. It
+     * would happily accept 1,000 rupees turning into 1,000,000 dollars.
+     *
+     * <p>Grouping by currency first means each side of the trade has to balance against its own
+     * position leg, which is the only sense in which a multi-currency posting can be said to
+     * balance at all. Adding rupees to dollars is not arithmetic.
      */
     public void assertBalanced() {
-        BigDecimal debits = sum(EntryDirection.DEBIT);
-        BigDecimal credits = sum(EntryDirection.CREDIT);
-        if (debits.compareTo(credits) != 0) {
-            throw new BusinessRuleException("UNBALANCED_POSTING",
-                    "Debits (" + debits + ") do not equal credits (" + credits + ")");
+        Map<String, BigDecimal> netByCurrency = new TreeMap<>();
+        for (LedgerEntry entry : entries) {
+            BigDecimal signed = entry.getDirection() == EntryDirection.DEBIT
+                    ? entry.getAmount()
+                    : entry.getAmount().negate();
+            netByCurrency.merge(entry.getAccount().getCurrency(), signed, BigDecimal::add);
         }
-    }
 
-    private BigDecimal sum(EntryDirection direction) {
-        return entries.stream()
-                .filter(entry -> entry.getDirection() == direction)
-                .map(LedgerEntry::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        for (Map.Entry<String, BigDecimal> net : netByCurrency.entrySet()) {
+            if (net.getValue().compareTo(BigDecimal.ZERO) != 0) {
+                throw new BusinessRuleException("UNBALANCED_POSTING",
+                        "Debits and credits do not balance in " + net.getKey()
+                                + " (net " + net.getValue() + ")");
+            }
+        }
     }
 }

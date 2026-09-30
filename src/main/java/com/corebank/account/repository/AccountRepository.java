@@ -34,6 +34,19 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     @Query("select a from Account a where a.accountNumber = :accountNumber")
     Optional<Account> findByAccountNumberForUpdate(@Param("accountNumber") String accountNumber);
 
+    /**
+     * The bank's position account in one currency, row-locked like every other posting account.
+     * There is exactly one per currency, so the unique-ish lookup is on the pair of type and
+     * currency rather than on an account number the posting path would have to know.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select a from Account a
+             where a.accountType = com.corebank.account.domain.AccountType.FX_POSITION_GL
+               and a.currency = :currency
+            """)
+    Optional<Account> findFxPositionForUpdate(@Param("currency") String currency);
+
     @Query("select count(a) from Account a where a.customer.id = :customerId and a.status <> com.corebank.account.domain.AccountStatus.CLOSED")
     long countOpenAccounts(@Param("customerId") UUID customerId);
 

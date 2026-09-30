@@ -27,6 +27,10 @@ public record TransactionResponse(
                 example = "TXN-20250417-9F3A2B1C")
         String reversalOf,
 
+        @Schema(description = "On a cross-currency transfer, the rate applied, what the amount became "
+                + "and in which currency. All three are null on a single-currency posting.")
+        Fx fx,
+
         List<Leg> legs) {
 
     @Schema(description = "One side of the double-entry posting")
@@ -47,6 +51,19 @@ public record TransactionResponse(
         }
     }
 
+    @Schema(description = "What a cross-currency posting converted, and at what rate")
+    public record Fx(BigDecimal exchangeRate, BigDecimal counterAmount, String counterCurrency) {
+
+        /** Null unless the posting actually crossed currencies -- see the V10 check constraint. */
+        static Fx from(BankTransaction transaction) {
+            return transaction.getExchangeRate() == null
+                    ? null
+                    : new Fx(transaction.getExchangeRate(),
+                            Money.normalize(transaction.getCounterAmount()),
+                            transaction.getCounterCurrency());
+        }
+    }
+
     public static TransactionResponse from(BankTransaction transaction) {
         return new TransactionResponse(
                 transaction.getId(),
@@ -58,6 +75,7 @@ public record TransactionResponse(
                 transaction.getDescription(),
                 transaction.getPostedAt(),
                 transaction.getReversalOf() == null ? null : transaction.getReversalOf().getReference(),
+                Fx.from(transaction),
                 transaction.getEntries().stream().map(Leg::from).toList());
     }
 }

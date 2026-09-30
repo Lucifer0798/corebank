@@ -6,6 +6,8 @@ import com.corebank.account.service.AccountService;
 import com.corebank.common.Money;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.common.exception.ResourceNotFoundException;
+import com.corebank.fx.domain.FxRate;
+import com.corebank.fx.service.FxRateService;
 import com.corebank.transaction.domain.BankTransaction;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.domain.TransactionType;
@@ -47,6 +49,7 @@ public class TransactionService {
     private final ApplicationEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
     private final VelocityLimits velocityLimits;
+    private final FxRateService fxRateService;
 
     public TransactionService(BankTransactionRepository transactions,
                               LedgerEntryRepository entries,
@@ -54,7 +57,8 @@ public class TransactionService {
                               ReferenceGenerator referenceGenerator,
                               ApplicationEventPublisher eventPublisher,
                               MeterRegistry meterRegistry,
-                              VelocityLimits velocityLimits) {
+                              VelocityLimits velocityLimits,
+                              FxRateService fxRateService) {
         this.transactions = transactions;
         this.entries = entries;
         this.accountService = accountService;
@@ -62,6 +66,7 @@ public class TransactionService {
         this.eventPublisher = eventPublisher;
         this.meterRegistry = meterRegistry;
         this.velocityLimits = velocityLimits;
+        this.fxRateService = fxRateService;
     }
 
     /** Cash in at the counter: the bank holds more cash, and owes the customer more. */
@@ -144,14 +149,60 @@ public class TransactionService {
         lockOrder.forEach(accountService::requireForUpdate);
 
         Account source = customerAccountForUpdate(request.sourceAccountId(), currency);
-        Account destination = customerAccountForUpdate(request.destinationAccountId(), currency);
+        Account destination = customerAccountForUpdate(request.destinationAccountId());
 
         BankTransaction transaction = newTransaction(
                 TransactionType.TRANSFER, amount, currency, request.description(), idempotencyKey);
-        transaction.addEntry(source, EntryDirection.DEBIT, amount);
-        transaction.addEntry(destination, EntryDirection.CREDIT, amount);
+
+        if (destination.getCurrency().equals(currency)) {
+            transaction.addEntry(source, EntryDirection.DEBIT, amount);
+            transaction.addEntry(destination, EntryDirection.CREDIT, amount);
+        } else {
+            addCrossCurrencyLegs(transaction, source, destination, amount);
+        }
 
         return post(transaction);
+    }
+
+    /**
+     * The four legs of a cross-currency transfer, and the position accounts that make them balance.
+     *
+     * <p>There is no pair of entries that can express this. The customer pays rupees and is paid
+     * dollars; a two-leg posting would have to claim those are the same amount, which is how a
+     * ledger ends up asserting that a thousand rupees <em>is</em> twelve dollars rather than that
+     * it was <em>exchanged for</em> twelve dollars. So each currency balances against its own FX
+     * position account, and what the bank has really done -- bought one currency and sold another
+     * -- is visible in those two accounts afterwards.
+     *
+     * <p>The spread stays there too. The bank credits itself the full amount received and debits
+     * itself slightly less than the mid-rate equivalent paid out, so the position accounts net to
+     * the margin, valued at market. Nothing separate has to book the profit.
+     */
+    private void addCrossCurrencyLegs(BankTransaction transaction, Account source,
+                                      Account destination, BigDecimal amount) {
+        String from = source.getCurrency();
+        String to = destination.getCurrency();
+        FxRate rate = fxRateService.require(from, to);
+        BigDecimal converted = rate.convert(amount);
+
+        if (!Money.isPositive(converted)) {
+            // A conversion small enough to round to nothing would otherwise post a zero-amount
+            // leg, which the ledger refuses -- better to say why than to fail on a constraint.
+            throw new BusinessRuleException("FX_AMOUNT_TOO_SMALL",
+                    amount + " " + from + " converts to less than the smallest unit of " + to);
+        }
+
+        Account fromPosition = accountService.fxPositionAccount(from);
+        Account toPosition = accountService.fxPositionAccount(to);
+
+        transaction.addEntry(source, EntryDirection.DEBIT, amount);
+        transaction.addEntry(fromPosition, EntryDirection.CREDIT, amount);
+        transaction.addEntry(toPosition, EntryDirection.DEBIT, converted);
+        transaction.addEntry(destination, EntryDirection.CREDIT, converted);
+
+        transaction.setExchangeRate(rate.effectiveRate());
+        transaction.setCounterAmount(converted);
+        transaction.setCounterCurrency(to);
     }
 
     /**
@@ -258,13 +309,22 @@ public class TransactionService {
     }
 
     private Account customerAccountForUpdate(UUID accountId, String currency) {
+        Account account = customerAccountForUpdate(accountId);
+        account.assertCurrency(currency);
+        return account;
+    }
+
+    /**
+     * As above, without pinning the account to a currency -- for the receiving side of a transfer,
+     * which may legitimately be held in another one. Every other guard still applies.
+     */
+    private Account customerAccountForUpdate(UUID accountId) {
         Account account = accountService.requireForUpdate(accountId);
         if (!account.isCustomerAccount()) {
             throw new BusinessRuleException("INTERNAL_ACCOUNT",
                     "General-ledger accounts cannot be used through this endpoint");
         }
         account.assertPostable();
-        account.assertCurrency(currency);
         return account;
     }
 

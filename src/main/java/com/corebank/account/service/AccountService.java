@@ -157,6 +157,17 @@ public class AccountService {
                         "General-ledger account " + accountNumber + " is missing; check the Flyway baseline"));
     }
 
+    /**
+     * The FX position account for one currency, by convention {@code GL00000000NN}. Looked up by
+     * currency rather than by a hardcoded number at each call site, so adding a currency the bank
+     * deals in is a migration and a lookup rather than an edit in the posting path.
+     */
+    public Account fxPositionAccount(String currency) {
+        return accounts.findFxPositionForUpdate(currency)
+                .orElseThrow(() -> new BusinessRuleException("FX_RATE_UNAVAILABLE",
+                        "This bank holds no position account in " + currency));
+    }
+
     public Account cashAccount() {
         return requireInternalAccount(properties.ledger().cashAccountNumber());
     }
