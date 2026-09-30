@@ -20,6 +20,9 @@ class BankTransactionTest {
     private BankTransaction transaction;
     private Account source;
     private Account destination;
+    private Account dollarAccount;
+    private Account rupeePosition;
+    private Account dollarPosition;
 
     @BeforeEach
     void setUp() {
@@ -32,6 +35,21 @@ class BankTransactionTest {
 
         source = account("100100000001", "500.00");
         destination = account("100100000002", "0.00");
+        dollarAccount = inCurrency(account("100100000003", "0.00"), "USD");
+        rupeePosition = internal(account("GL0000000010", "0.00"), "INR");
+        dollarPosition = internal(account("GL0000000011", "0.00"), "USD");
+    }
+
+    private static Account inCurrency(Account account, String currency) {
+        account.setCurrency(currency);
+        return account;
+    }
+
+    private static Account internal(Account account, String currency) {
+        account.setAccountClass(AccountClass.INTERNAL);
+        account.setAccountType(AccountType.FX_POSITION_GL);
+        account.setCurrency(currency);
+        return account;
     }
 
     private static Account account(String number, String balance) {
@@ -89,7 +107,47 @@ class BankTransactionTest {
 
         assertThatThrownBy(transaction::assertBalanced)
                 .isInstanceOf(BusinessRuleException.class)
-                .hasMessageContaining("do not equal");
+                .hasMessageContaining("do not balance in INR");
+    }
+
+    @Test
+    @DisplayName("a four-legged posting balances when each currency balances on its own")
+    void aBalancedCrossCurrencyPostingPasses() {
+        transaction.addEntry(source, EntryDirection.DEBIT, new BigDecimal("100.00"));
+        transaction.addEntry(rupeePosition, EntryDirection.CREDIT, new BigDecimal("100.00"));
+        transaction.addEntry(dollarPosition, EntryDirection.DEBIT, new BigDecimal("1.19"));
+        transaction.addEntry(dollarAccount, EntryDirection.CREDIT, new BigDecimal("1.19"));
+
+        transaction.assertBalanced();
+    }
+
+    @Test
+    @DisplayName("a cross-currency posting whose converted side is wrong is rejected")
+    void aCrossCurrencyPostingMustBalanceInEachCurrency() {
+        // The assertion the per-currency rule exists for, and the one a total-only check cannot
+        // make. Summed together these four legs come to 100 + 1000 on each side and pass, which
+        // is a ledger cheerfully recording that 100 rupees became a thousand dollars. Only
+        // grouping by currency first notices that the dollar side does not close.
+        transaction.addEntry(source, EntryDirection.DEBIT, new BigDecimal("100.00"));
+        transaction.addEntry(rupeePosition, EntryDirection.CREDIT, new BigDecimal("100.00"));
+        transaction.addEntry(dollarPosition, EntryDirection.DEBIT, new BigDecimal("1000.00"));
+        transaction.addEntry(dollarAccount, EntryDirection.CREDIT, new BigDecimal("1.19"));
+
+        assertThatThrownBy(transaction::assertBalanced)
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessageContaining("do not balance in USD");
+    }
+
+    @Test
+    @DisplayName("legs that cancel across currencies but not within one are still rejected")
+    void offsettingAcrossCurrenciesIsNotBalance() {
+        // The purest form of the bug: debits and credits are equal in total -- 100 each side --
+        // and yet neither currency closes. Adding rupees to dollars is not arithmetic.
+        transaction.addEntry(source, EntryDirection.DEBIT, new BigDecimal("100.00"));
+        transaction.addEntry(dollarAccount, EntryDirection.CREDIT, new BigDecimal("100.00"));
+
+        assertThatThrownBy(transaction::assertBalanced)
+                .isInstanceOf(BusinessRuleException.class);
     }
 
     @Test

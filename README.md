@@ -28,6 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
+| FX | Cross-currency transfers, posted as four legs through per-currency position accounts. |
 | Interest | Savings balances accrue daily at full scale and capitalise monthly as a real posting. |
 | Velocity limits | A per-account daily debit ceiling and a per-posting ceiling, counted from the ledger. |
 | Holds | Authorisation holds reserve money without posting it. Captured, released, or expired by a sweep. |
@@ -305,6 +306,37 @@ correction is not new lending; refusing one because the customer has since spent
 would leave the ledger permanently wrong about a movement that should never have happened.
 A reversal is **not** itself reversible: correcting a mistaken reversal means posting the
 original movement again, not stacking a second correction on the first.
+
+### Cross-currency transfers
+
+`Money.BASE_CURRENCY` has said since Phase 1 that "multi-currency ledgers arrive with FX in a later
+phase". Until now `Account.assertCurrency` refused any posting whose currency did not match the
+account, which kept the ledger honest by keeping it monolingual.
+
+**An FX transfer is four legs, not two**, and that is the whole shape of the change. The customer
+pays in one currency and is paid in another, so no pair of entries balances: a two-leg posting would
+have to claim those amounts are equal, which is a ledger recording that ₹10,000 *is* $119.40 rather
+than that it was *exchanged for* it. Instead each currency balances against its own **FX position
+account** — the source debited and the INR position credited, the USD position debited and the
+destination credited. What the bank actually did, bought one currency and sold another, is then
+visible in those two accounts.
+
+**`assertBalanced` now balances per currency**, and it had to. Summed in total, those four legs
+balance by pure coincidence — each amount appears once on each side, so *any* two numbers pass. The
+old check would have accepted ₹1,000 becoming $1,000,000. Grouping by currency first is the only
+sense in which a multi-currency posting can be said to balance; adding rupees to dollars is not
+arithmetic.
+
+**The spread stays with the position accounts.** The bank credits itself everything received and
+debits itself slightly less than the mid-rate equivalent paid out, so the positions net to the
+margin at market — nothing separate books the profit. The mid rate and the spread are stored apart,
+because a rate already net of spread cannot be audited against any published source afterwards, and
+`GET /api/v1/fx/quote` returns both.
+
+Rates are seeded indicative values; a real deployment replaces them from a feed. Quoting does not
+reserve — a transfer is converted at whatever is quoted when it is submitted, and records that rate
+on the posting at eight decimal places, because a rate is not money and rounding it to the money
+scale would make a large conversion irreproducible from its own audit trail.
 
 ### Interest
 
@@ -712,6 +744,7 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/transactions/{reference}/reversal` | ADMIN | Reverse a posting — needs `Idempotency-Key` and a `reason` |
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
+| `GET` | `/api/v1/fx/quote` | any | What an amount converts to: `from`, `to`, `amount` |
 | `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
 | `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
 | `POST` | `/api/v1/admin/outbox/replay/transactions` | ADMIN | Re-enqueue transaction-posted events for `since`/`until` |
@@ -760,6 +793,8 @@ as REST, passed as `authorization` metadata.
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
 | `SAME_ACCOUNT_TRANSFER` | 422 | Source and destination are the same account |
+| `FX_RATE_UNAVAILABLE` | 422 | The bank does not quote that currency pair |
+| `FX_AMOUNT_TOO_SMALL` | 422 | The amount converts to less than the smallest unit of the target currency |
 | `SCHEDULE_STARTS_IN_PAST` | 422 | A standing instruction cannot be backdated |
 | `SCHEDULE_NEVER_RUNS` | 422 | The window contains no occurrence |
 | `SCHEDULE_NOT_ACTIVE` | 422 | That instruction has already stopped |
