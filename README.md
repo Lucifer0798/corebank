@@ -28,7 +28,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
-| FX | Cross-currency transfers, posted as four legs through per-currency position accounts. |
+| FX | Cross-currency transfers, posted as four legs through per-currency position accounts, with the book valued and marked to market. |
 | Interest | Savings balances accrue daily at full scale and capitalise monthly as a real posting. |
 | Velocity limits | A per-account daily debit ceiling and a per-posting ceiling, counted from the ledger. |
 | Holds | Authorisation holds reserve money without posting it. Captured, released, or expired by a sweep. |
@@ -332,6 +332,39 @@ debits itself slightly less than the mid-rate equivalent paid out, so the positi
 margin at market — nothing separate books the profit. The mid rate and the spread are stored apart,
 because a rate already net of spread cannot be audited against any published source afterwards, and
 `GET /api/v1/fx/quote` returns both.
+
+#### Valuing the book
+
+V10 built the position accounts and nothing read them — a bank holding offsetting amounts in four
+currencies and never valuing them does not know its own exposure. `GET /api/v1/fx/position` answers
+that: each position in its own currency, valued into the reporting currency, plus what the
+revaluation account currently carries the book at. The gap between the two is what a close would
+recognise.
+
+Positions are valued at the **directly quoted** rate into the reporting currency (`USD/INR`), never
+at the inverse of the opposite quote (`1 / INR/USD`). Those disagree in this book by 0.10% to 0.64%,
+and the directly quoted one is the rate the bank could actually transact at. They are valued at
+**mid**, not at the bank's own spread — marking a book at the price you would charge to close it
+reports a profit you have not made.
+
+A close posts the **delta, not the mark**. The revaluation account carries the mark as its balance,
+so a run only moves it to where the market now says it should be: running twice in a row is
+harmless, and a missed close is caught up by the next one rather than lost. Posting the mark itself
+would double the book on every run.
+
+Both legs of a revaluation are in the reporting currency, and that is forced rather than chosen —
+the per-currency balance rule means a posting mixing INR with USD cannot balance at all. So the
+foreign positions are never touched by a close, which is precisely what makes the gain
+**unrealised**: nothing has happened to the dollars, the bank has only restated what holding them
+is worth.
+
+Revaluation is an explicit admin action rather than a scheduled job. A close is an operational
+decision about a point in time, not something that should happen on a timer.
+
+The seeded cross-rates are not mutually consistent, which is tolerable only while the spread covers
+it — otherwise a customer could mint money cycling between their own accounts. A test asserts that
+every round trip *and* every triangle loses money, so an edited rate that broke that would fail the
+build rather than reach production.
 
 Rates are seeded indicative values; a real deployment replaces them from a feed. Quoting does not
 reserve — a transfer is converted at whatever is quoted when it is submitted, and records that rate
@@ -745,6 +778,8 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
 | `GET` | `/api/v1/fx/quote` | any | What an amount converts to: `from`, `to`, `amount` |
+| `GET` | `/api/v1/fx/position` | ADMIN | The bank's own currency exposure, valued into the reporting currency |
+| `POST` | `/api/v1/fx/revalue` | ADMIN | Mark the book to market, posting the change since the last close |
 | `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
 | `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
 | `POST` | `/api/v1/admin/outbox/replay/transactions` | ADMIN | Re-enqueue transaction-posted events for `since`/`until` |

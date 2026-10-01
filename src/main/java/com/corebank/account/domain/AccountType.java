@@ -12,5 +12,12 @@ public enum AccountType {
      * these -- credited in the currency received, debited in the currency paid out -- so that each
      * side of the trade balances in its own money.
      */
-    FX_POSITION_GL
+    FX_POSITION_GL,
+    /**
+     * Carries the reporting-currency mark of the whole FX book. Asset-like, so its balance is
+     * always the current mark -- which is what makes a revaluation checkable rather than trusted.
+     */
+    FX_REVALUATION_GL,
+    /** Where a change in that mark is recognised. Income-like: a gain is a credit. */
+    FX_GAIN_LOSS_GL
 }
