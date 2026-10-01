@@ -14,5 +14,10 @@ public enum TransactionType {
      * A month's accrued interest becoming real money. Its own type so a statement line can say
      * what it is rather than presenting the bank's own credit as a deposit the customer made.
      */
-    INTEREST
+    INTEREST,
+    /**
+     * Marking the FX book to market. The only posting here that moves no customer money at all --
+     * the bank restating what it already holds, rather than anything changing hands.
+     */
+    FX_REVALUATION
 }
