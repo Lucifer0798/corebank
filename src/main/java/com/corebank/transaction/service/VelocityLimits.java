@@ -1,9 +1,12 @@
 package com.corebank.transaction.service;
 
 import com.corebank.common.exception.LimitExceededException;
+import com.corebank.common.Money;
 import com.corebank.config.CoreBankProperties;
+import com.corebank.fx.service.FxRateService;
 import com.corebank.transaction.repository.LedgerEntryRepository;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -40,19 +43,35 @@ import org.springframework.stereotype.Component;
 @Component
 public class VelocityLimits {
 
+    /**
+     * The currency the limits are configured in. The base currency, so a deployment's existing
+     * {@code COREBANK_DAILY_DEBIT_LIMIT} keeps meaning what it always meant for rupee accounts.
+     */
+    static final String LIMIT_CURRENCY = Money.BASE_CURRENCY;
+
     private final LedgerEntryRepository entries;
     private final CoreBankProperties.Limits limits;
+    private final FxRateService fxRateService;
     private final Clock clock;
 
-    public VelocityLimits(LedgerEntryRepository entries, CoreBankProperties properties, Clock clock) {
+    public VelocityLimits(LedgerEntryRepository entries, CoreBankProperties properties,
+                          FxRateService fxRateService, Clock clock) {
         this.entries = entries;
         this.limits = properties.limits();
+        this.fxRateService = fxRateService;
         this.clock = clock;
     }
 
-    /** Refuses the posting if it would breach either control. */
-    public void assertWithin(UUID accountId, BigDecimal amount) {
-        assertWithin(accountId, amount, BigDecimal.ZERO);
+    /**
+     * Refuses the posting if it would breach either control.
+     *
+     * <p>{@code currency} is the account's, and it is required. Without it this compared a dollar
+     * amount against a limit configured in rupees as though they were the same unit, so a dollar
+     * account got roughly 83 times the allowance of a rupee one -- the limits were written when every
+     * account was in rupees, and #36 made the others real.
+     */
+    public void assertWithin(UUID accountId, String currency, BigDecimal amount) {
+        assertWithin(accountId, currency, amount, BigDecimal.ZERO);
     }
 
     /**
@@ -71,15 +90,45 @@ public class VelocityLimits {
      * overshoot -- the first breaks the guarantee, the second denies a customer money they have not
      * spent.
      */
-    public void assertWithin(UUID accountId, BigDecimal amount, BigDecimal pendingToday) {
-        if (amount.compareTo(limits.singleTransactionLimit()) > 0) {
-            throw LimitExceededException.singleTransaction(amount, limits.singleTransactionLimit());
+    public void assertWithin(UUID accountId, String currency, BigDecimal amount, BigDecimal pendingToday) {
+        // Everything is converted into the limits' currency before it is compared. The day's total
+        // is summed in the account's own currency -- every entry on one account is in that currency
+        // -- so it converts at the same single rate as the amount.
+        BigDecimal rate = rateToLimitCurrency(currency);
+        BigDecimal requested = toLimitCurrency(amount, rate);
+
+        if (requested.compareTo(limits.singleTransactionLimit()) > 0) {
+            throw LimitExceededException.singleTransaction(
+                    requested, limits.singleTransactionLimit(), LIMIT_CURRENCY);
         }
 
-        BigDecimal committed = debitedToday(accountId).add(pendingToday);
-        if (committed.add(amount).compareTo(limits.dailyDebitLimit()) > 0) {
-            throw LimitExceededException.daily(committed, amount, limits.dailyDebitLimit());
+        BigDecimal committed = toLimitCurrency(debitedToday(accountId).add(pendingToday), rate);
+        if (committed.add(requested).compareTo(limits.dailyDebitLimit()) > 0) {
+            throw LimitExceededException.daily(
+                    committed, requested, limits.dailyDebitLimit(), LIMIT_CURRENCY);
         }
+    }
+
+    /**
+     * Units of the limits' currency per unit of {@code currency}, at <em>mid</em>.
+     *
+     * <p>Mid, not the rate a customer would be paid: a limit measures how much value is leaving, and
+     * the bank's own spread is not part of that. The same convention FxPositionService uses to value
+     * the book, for the same reason. The directly quoted rate, never an inverted one -- the seeded
+     * book disagrees with itself by up to 0.64% between the two.
+     *
+     * <p>No rate means the debit is refused, because a control that cannot be evaluated must fail
+     * closed. In practice V12 makes this unreachable for any account that can actually hold money:
+     * a currency with no rate also has no cash account, so nothing can be deposited into it.
+     */
+    private BigDecimal rateToLimitCurrency(String currency) {
+        return currency.equals(LIMIT_CURRENCY)
+                ? BigDecimal.ONE
+                : fxRateService.require(currency, LIMIT_CURRENCY).getMidRate();
+    }
+
+    private static BigDecimal toLimitCurrency(BigDecimal amount, BigDecimal rate) {
+        return amount.multiply(rate).setScale(Money.SCALE, RoundingMode.HALF_UP);
     }
 
     /** The UTC calendar day the daily total is measured over, as a half-open instant range. */

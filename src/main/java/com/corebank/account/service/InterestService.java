@@ -130,7 +130,9 @@ public class InterestService {
         }
         account.takeCapitalisableInterest();
 
-        Account expense = accountService.requireInternalAccount("GL0000000003");
+        // Interest expense in the account's own currency. Hardcoding the rupee account here meant
+        // a dollar savings account could accrue interest but never be paid it -- see V12.
+        Account expense = accountService.interestExpenseAccount(account.getCurrency());
         BankTransaction transaction = new BankTransaction();
         transaction.setReference(referenceGenerator.next());
         transaction.setType(TransactionType.INTEREST);
