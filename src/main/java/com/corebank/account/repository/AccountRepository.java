@@ -35,6 +35,17 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     Optional<Account> findByAccountNumberForUpdate(@Param("accountNumber") String accountNumber);
 
     /**
+     * Whether the bank keeps an internal account of a type in a currency. Unlocked, unlike
+     * {@link #findInternalForUpdate}: opening an account only needs to know the currency is
+     * supported, and row-locking the bank's cash account to answer that would serialise every
+     * account opening behind every deposit for no reason.
+     */
+    boolean existsByAccountClassAndAccountTypeAndCurrency(
+            com.corebank.account.domain.AccountClass accountClass,
+            com.corebank.account.domain.AccountType accountType,
+            String currency);
+
+    /**
      * The bank's internal account of one type in one currency, row-locked like every other posting
      * account.
      *
@@ -50,17 +61,6 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
                and a.accountType = :type
                and a.currency = :currency
             """)
-    /**
-     * Whether the bank keeps an internal account of a type in a currency. Unlocked, unlike
-     * {@link #findInternalForUpdate}: opening an account only needs to know the currency is
-     * supported, and row-locking the bank's cash account to answer that would serialise every
-     * account opening behind every deposit for no reason.
-     */
-    boolean existsByAccountClassAndAccountTypeAndCurrency(
-            com.corebank.account.domain.AccountClass accountClass,
-            com.corebank.account.domain.AccountType accountType,
-            String currency);
-
     List<Account> findInternalForUpdate(@Param("type") com.corebank.account.domain.AccountType type,
                                         @Param("currency") String currency);
 
