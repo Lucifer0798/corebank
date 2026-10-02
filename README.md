@@ -371,6 +371,35 @@ reserve — a transfer is converted at whatever is quoted when it is submitted, 
 on the posting at eight decimal places, because a rate is not money and rounding it to the money
 scale would make a large conversion irreproducible from its own audit trail.
 
+### Internal accounts exist per currency
+
+Every posting that touches an internal account looks it up by **type and currency** —
+`AccountService.internalAccount(type, currency)` — rather than by account number. Cash, interest
+expense and the FX positions each exist once per currency the bank deals in.
+
+That rule came from a bug. When the ledger started balancing per currency (FX, V10), cash and
+interest expense had only ever existed in rupees, and were reached by number. From then on any
+posting pairing a dollar, euro or sterling account with either could not balance: such an account
+could take no cash deposit and no withdrawal, and interest on one accrued every day and was never
+paid. The per-currency rule refused those postings loudly, which is what it is for — before it, a
+dollar deposit would have balanced against rupee cash in silence. V12 adds the missing accounts.
+
+Opening an account in a currency the bank holds no cash account in is refused with
+`CURRENCY_NOT_SUPPORTED`. It used to check only the ISO shape, so a JPY account would open and then
+be dead for good: nothing could be deposited into it and nothing converted into it.
+
+### What can be reversed
+
+Reversal is for undoing what a customer or teller did — deposits, withdrawals and transfers — and
+that is an **allow-list** in `BankTransaction`. It used to be a single block on reversing a
+reversal, which left interest and FX revaluation reversible by default simply because nobody had
+forbidden them. Both were wrong to reverse: reversing interest destroyed it outright (capitalising
+moves it out of `accrued_interest` and into the balance; the reversal took it back out of the
+balance and restored nothing), and reversing a revaluation broke the invariant that the
+revaluation account's balance is the mark. System postings are corrected by the process that
+produced them. As an allow-list, the next posting type anyone adds is non-reversible until somebody
+decides otherwise, rather than reversible until somebody notices.
+
 ### Interest
 
 Savings balances earn interest, accrued daily and capitalised monthly. It is the feature this
@@ -406,7 +435,10 @@ frequency can exceed.
 
 ### Velocity limits
 
-Two ceilings, per account: one on a single posting, one on a UTC calendar day's total debits. They
+Two ceilings, per account: one on a single posting, one on a UTC calendar day's total debits.
+Both are configured in rupees, and a debit on an account in another currency is converted at the
+mid rate before it is compared — a dollar account used to get roughly 83 times a rupee account's
+allowance, because the limits were written as bare numbers when every account was in rupees. They
 apply to withdrawals and outgoing transfers — not to deposits or incoming transfers, since money
 arriving is not what a velocity control is about, and applying it there would refuse a customer
 their own salary.
@@ -829,6 +861,8 @@ as REST, passed as `authorization` metadata.
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
 | `SAME_ACCOUNT_TRANSFER` | 422 | Source and destination are the same account |
 | `FX_RATE_UNAVAILABLE` | 422 | The bank does not quote that currency pair |
+| `CURRENCY_NOT_SUPPORTED` | 422 | The bank holds no accounts in that currency |
+| `NOT_REVERSIBLE` | 422 | A system posting (interest, FX revaluation) is corrected by the process that produced it, not by reversal |
 | `FX_AMOUNT_TOO_SMALL` | 422 | The amount converts to less than the smallest unit of the target currency |
 | `SCHEDULE_STARTS_IN_PAST` | 422 | A standing instruction cannot be backdated |
 | `SCHEDULE_NEVER_RUNS` | 422 | The window contains no occurrence |

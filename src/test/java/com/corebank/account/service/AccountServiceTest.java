@@ -86,6 +86,11 @@ class AccountServiceTest {
     @DisplayName("a customer one account below the limit can still open another")
     void oneBelowTheLimitIsAllowed() {
         stubEligibleCustomer();
+        // The only test here that gets as far as choosing a currency: the two rejection tests are
+        // refused on the account limit first. Stubbed in this test alone so strict stubbing still
+        // flags it as unnecessary anywhere it is not reached.
+        when(accounts.existsByAccountClassAndAccountTypeAndCurrency(
+                AccountClass.INTERNAL, AccountType.CASH_GL, "INR")).thenReturn(true);
         when(sequences.next(AccountService.ACCOUNT_NUMBER_SEQUENCE)).thenReturn(42L);
         when(accounts.save(any(Account.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(accounts.countOpenAccounts(customer.getId())).thenReturn((long) LIMIT - 1);

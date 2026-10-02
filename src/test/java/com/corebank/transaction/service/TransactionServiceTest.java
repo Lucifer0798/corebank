@@ -109,7 +109,9 @@ class TransactionServiceTest {
 
         when(referenceGenerator.next()).thenReturn("TXN-20250417-TESTTEST");
         when(accountService.requireForUpdate(ACCOUNT_ID)).thenReturn(customer);
-        when(accountService.cashAccount()).thenReturn(cash);
+        // By currency: the posting path now asks for cash in the account's own currency, so a
+        // dollar posting gets a dollar contra leg. Every account in this test is in rupees.
+        when(accountService.cashAccount("INR")).thenReturn(cash);
         when(transactions.save(any(BankTransaction.class))).thenAnswer(call -> call.getArgument(0));
     }
 

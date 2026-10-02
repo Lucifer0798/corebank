@@ -76,7 +76,9 @@ public class TransactionService {
         String currency = currencyOf(request.currency());
 
         Account account = customerAccountForUpdate(accountId, currency);
-        Account cash = accountService.cashAccount();
+        // In the account's own currency. A rupee cash leg against a dollar account cannot
+        // balance, which is the bug V12 fixes -- see AccountService.internalAccount.
+        Account cash = accountService.cashAccount(currency);
 
         BankTransaction transaction = newTransaction(
                 TransactionType.DEPOSIT, amount, currency, request.description(), idempotencyKey);
@@ -109,11 +111,13 @@ public class TransactionService {
         String currency = currencyOf(request.currency());
 
         if (enforceVelocityLimit) {
-            velocityLimits.assertWithin(accountId, amount);
+            velocityLimits.assertWithin(accountId, currency, amount);
         }
 
         Account account = customerAccountForUpdate(accountId, currency);
-        Account cash = accountService.cashAccount();
+        // In the account's own currency. A rupee cash leg against a dollar account cannot
+        // balance, which is the bug V12 fixes -- see AccountService.internalAccount.
+        Account cash = accountService.cashAccount(currency);
 
         BankTransaction transaction = newTransaction(
                 TransactionType.WITHDRAWAL, amount, currency, request.description(), idempotencyKey);
@@ -138,7 +142,7 @@ public class TransactionService {
         // Checked against the paying side only. The money leaving is what a velocity control is
         // about; an account receiving an unusual amount is a different concern with different
         // rules, and applying this one to it would refuse a customer their own salary.
-        velocityLimits.assertWithin(request.sourceAccountId(), amount);
+        velocityLimits.assertWithin(request.sourceAccountId(), currency, amount);
 
         // Take both row locks in a stable order regardless of transfer direction, so that a
         // simultaneous transfer the other way waits rather than deadlocking.

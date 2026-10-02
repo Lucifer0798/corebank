@@ -18,6 +18,7 @@ import com.corebank.customer.domain.Customer;
 import com.corebank.customer.service.CustomerService;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -76,7 +77,18 @@ public class AccountService {
         account.setAccountType(request.accountType());
         // A customer account is a liability of the bank: money in is a credit.
         account.setNormalBalance(EntryDirection.CREDIT);
-        account.setCurrency(request.currency() == null ? Money.BASE_CURRENCY : request.currency());
+        String currency = request.currency() == null ? Money.BASE_CURRENCY : request.currency();
+        // Refused at the door. Only the ISO shape used to be checked, so an account could be opened
+        // in any three letters -- and one in a currency the bank keeps no cash account in could
+        // never receive a deposit, nor be converted into, and was simply dead from the moment it
+        // existed. Cash is the test because it is the one internal account every usable currency
+        // must have: without it nothing can be paid in.
+        if (!accounts.existsByAccountClassAndAccountTypeAndCurrency(
+                AccountClass.INTERNAL, AccountType.CASH_GL, currency)) {
+            throw new BusinessRuleException("CURRENCY_NOT_SUPPORTED",
+                    "This bank does not hold accounts in " + currency);
+        }
+        account.setCurrency(currency);
         account.setBalance(Money.ZERO);
         account.setOverdraftLimit(overdraftLimit);
         account.setStatus(AccountStatus.ACTIVE);
@@ -158,18 +170,53 @@ public class AccountService {
     }
 
     /**
-     * The FX position account for one currency, by convention {@code GL00000000NN}. Looked up by
-     * currency rather than by a hardcoded number at each call site, so adding a currency the bank
-     * deals in is a migration and a lookup rather than an edit in the posting path.
+     * The internal account of one type in one currency.
+     *
+     * <p>Every posting that touches an internal account goes through here, by type and currency,
+     * rather than naming an account number. That is the fix for the bug V12 describes: cash and
+     * interest expense were reached by number, and the numbers were rupee accounts, so a dollar
+     * posting got a rupee contra leg and could not balance. Looked up by currency, the contra leg is
+     * in the customer's currency by construction, and adding a currency is a migration rather than an
+     * edit to every posting path.
+     *
+     * <p>Missing is a business refusal rather than a server error: it means the bank does not deal
+     * in that currency, which a caller can be told. More than one is a configuration fault, refused
+     * by name -- choosing between two rupee cash accounts arbitrarily would be worse than stopping.
      */
-    public Account fxPositionAccount(String currency) {
-        return accounts.findFxPositionForUpdate(currency)
-                .orElseThrow(() -> new BusinessRuleException("FX_RATE_UNAVAILABLE",
-                        "This bank holds no position account in " + currency));
+    public Account internalAccount(AccountType type, String currency) {
+        List<Account> found = accounts.findInternalForUpdate(type, currency);
+        if (found.isEmpty()) {
+            throw new BusinessRuleException("CURRENCY_NOT_SUPPORTED",
+                    "This bank holds no " + type + " account in " + currency);
+        }
+        if (found.size() > 1) {
+            throw new IllegalStateException("There are " + found.size() + " " + type + " accounts in "
+                    + currency + "; the ledger cannot choose between them");
+        }
+        return found.getFirst();
     }
 
+    /** The bank's position in one currency. See {@link #internalAccount}. */
+    public Account fxPositionAccount(String currency) {
+        return internalAccount(AccountType.FX_POSITION_GL, currency);
+    }
+
+    /** Cash in one currency -- the contra leg of a deposit or withdrawal in that currency. */
+    public Account cashAccount(String currency) {
+        return internalAccount(AccountType.CASH_GL, currency);
+    }
+
+    /** The bank's cost of paying interest in one currency. */
+    public Account interestExpenseAccount(String currency) {
+        return internalAccount(AccountType.INTEREST_EXPENSE_GL, currency);
+    }
+
+    /**
+     * Rupee cash. Kept for callers that genuinely mean the base currency; anything posting against a
+     * customer account must use {@link #cashAccount(String)} with that account's currency instead.
+     */
     public Account cashAccount() {
-        return requireInternalAccount(properties.ledger().cashAccountNumber());
+        return cashAccount(com.corebank.common.Money.BASE_CURRENCY);
     }
 
     private String nextAccountNumber() {

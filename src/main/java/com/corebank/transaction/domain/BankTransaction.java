@@ -156,6 +156,30 @@ public class BankTransaction {
     }
 
     /**
+     * The postings a reversal may undo: movements a customer or teller initiated.
+     *
+     * <p>An allow-list, deliberately, where it used to be a single block on REVERSAL. That left
+     * INTEREST and FX_REVALUATION reversible by default, simply because nobody had thought to forbid
+     * them, and both were wrong to reverse:
+     *
+     * <ul>
+     *   <li>Reversing <strong>interest</strong> destroyed it. Capitalising moves the amount out of
+     *       {@code accrued_interest} and into the balance; a reversal took it back out of the
+     *       balance and restored nothing, so the interest vanished from both places at once.
+     *   <li>Reversing a <strong>revaluation</strong> broke the invariant that the revaluation
+     *       account's balance is the mark. A wrong mark is corrected by running the close again,
+     *       which posts the delta back to where the market says it should be.
+     * </ul>
+     *
+     * <p>Both are system postings with their own correction path, and the general rule is that the
+     * process which produced a posting is the one that corrects it. Listing what <em>can</em> be
+     * reversed means the next posting type anyone adds is non-reversible until someone decides
+     * otherwise, rather than reversible until someone notices.
+     */
+    private static final java.util.Set<TransactionType> REVERSIBLE_TYPES = java.util.EnumSet.of(
+            TransactionType.DEPOSIT, TransactionType.WITHDRAWAL, TransactionType.TRANSFER);
+
+    /**
      * Whether this posting may be reversed, and if not, why not. The two refusals mean different
      * things to a caller, so they are different exceptions rather than one:
      *
@@ -173,6 +197,10 @@ public class BankTransaction {
             throw new BusinessRuleException("REVERSAL_NOT_REVERSIBLE",
                     "Transaction " + reference + " is itself a reversal and cannot be reversed;"
                             + " post the original movement again instead");
+        }
+        if (!REVERSIBLE_TYPES.contains(type)) {
+            throw new BusinessRuleException("NOT_REVERSIBLE",
+                    "A " + type + " posting is corrected by the process that produced it, not by reversal");
         }
         if (status == TransactionStatus.REVERSED) {
             throw new ConflictException("ALREADY_REVERSED",

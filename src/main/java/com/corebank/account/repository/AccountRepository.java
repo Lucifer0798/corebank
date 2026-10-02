@@ -35,17 +35,34 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     Optional<Account> findByAccountNumberForUpdate(@Param("accountNumber") String accountNumber);
 
     /**
-     * The bank's position account in one currency, row-locked like every other posting account.
-     * There is exactly one per currency, so the unique-ish lookup is on the pair of type and
-     * currency rather than on an account number the posting path would have to know.
+     * Whether the bank keeps an internal account of a type in a currency. Unlocked, unlike
+     * {@link #findInternalForUpdate}: opening an account only needs to know the currency is
+     * supported, and row-locking the bank's cash account to answer that would serialise every
+     * account opening behind every deposit for no reason.
+     */
+    boolean existsByAccountClassAndAccountTypeAndCurrency(
+            com.corebank.account.domain.AccountClass accountClass,
+            com.corebank.account.domain.AccountType accountType,
+            String currency);
+
+    /**
+     * The bank's internal account of one type in one currency, row-locked like every other posting
+     * account.
+     *
+     * <p>A list rather than an Optional on purpose. There should be exactly one, and the caller
+     * refuses anything else by name -- an Optional over a query that matched two rows would throw a
+     * framework exception about result sizes, which is accurate and tells an operator nothing about
+     * which account is duplicated.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select a from Account a
-             where a.accountType = com.corebank.account.domain.AccountType.FX_POSITION_GL
+             where a.accountClass = com.corebank.account.domain.AccountClass.INTERNAL
+               and a.accountType = :type
                and a.currency = :currency
             """)
-    Optional<Account> findFxPositionForUpdate(@Param("currency") String currency);
+    List<Account> findInternalForUpdate(@Param("type") com.corebank.account.domain.AccountType type,
+                                        @Param("currency") String currency);
 
     @Query("select count(a) from Account a where a.customer.id = :customerId and a.status <> com.corebank.account.domain.AccountStatus.CLOSED")
     long countOpenAccounts(@Param("customerId") UUID customerId);

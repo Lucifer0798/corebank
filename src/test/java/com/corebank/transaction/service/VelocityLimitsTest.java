@@ -63,6 +63,9 @@ class VelocityLimitsTest {
     @Autowired
     private LedgerEntryRepository entries;
 
+    @Autowired
+    private com.corebank.fx.service.FxRateService fxRateService;
+
     private UUID accountId;
     private UUID otherId;
 
@@ -84,7 +87,7 @@ class VelocityLimitsTest {
 
     /** Limits with the numbers a test can actually reach. */
     private VelocityLimits limits(String daily, String single) {
-        return new VelocityLimits(entries, TestProperties.withLimits(daily, single), Clock.systemUTC());
+        return new VelocityLimits(entries, TestProperties.withLimits(daily, single), fxRateService, Clock.systemUTC());
     }
 
     private void withdraw(String amount, String key) {
@@ -156,12 +159,12 @@ class VelocityLimitsTest {
     void singlePostingCeiling() {
         VelocityLimits limits = limits("100000.00", "500.00");
 
-        assertThatThrownBy(() -> limits.assertWithin(accountId, new BigDecimal("500.01")))
+        assertThatThrownBy(() -> limits.assertWithin(accountId, "INR", new BigDecimal("500.01")))
                 .isInstanceOf(LimitExceededException.class)
                 .extracting(ex -> ((LimitExceededException) ex).getCode())
                 .isEqualTo("TRANSACTION_LIMIT_EXCEEDED");
 
-        assertThatCode(() -> limits.assertWithin(accountId, new BigDecimal("500.00")))
+        assertThatCode(() -> limits.assertWithin(accountId, "INR", new BigDecimal("500.00")))
                 .describedAs("exactly the ceiling is allowed")
                 .doesNotThrowAnyException();
     }
@@ -172,11 +175,11 @@ class VelocityLimitsTest {
         VelocityLimits limits = limits("1000.00", "1000.00");
         withdraw("600.00", "vl-day1-" + accountId);
 
-        assertThatCode(() -> limits.assertWithin(accountId, new BigDecimal("400.00")))
+        assertThatCode(() -> limits.assertWithin(accountId, "INR", new BigDecimal("400.00")))
                 .describedAs("exactly exhausting the allowance is allowed")
                 .doesNotThrowAnyException();
 
-        assertThatThrownBy(() -> limits.assertWithin(accountId, new BigDecimal("400.01")))
+        assertThatThrownBy(() -> limits.assertWithin(accountId, "INR", new BigDecimal("400.01")))
                 .isInstanceOf(LimitExceededException.class)
                 .extracting(ex -> ((LimitExceededException) ex).getCode())
                 .isEqualTo("DAILY_LIMIT_EXCEEDED");
@@ -190,7 +193,7 @@ class VelocityLimitsTest {
         VelocityLimits limits = limits("1000.00", "1000.00");
         withdraw("750.00", "vl-msg-" + accountId);
 
-        assertThatThrownBy(() -> limits.assertWithin(accountId, new BigDecimal("300.00")))
+        assertThatThrownBy(() -> limits.assertWithin(accountId, "INR", new BigDecimal("300.00")))
                 .hasMessageContaining("250.00");
     }
 
@@ -199,9 +202,9 @@ class VelocityLimitsTest {
     void holdsCountAtAuthorisation() {
         VelocityLimits limits = limits("1000.00", "1000.00");
 
-        limits.assertWithin(accountId, new BigDecimal("400.00"), new BigDecimal("400.00"));
+        limits.assertWithin(accountId, "INR", new BigDecimal("400.00"), new BigDecimal("400.00"));
 
-        assertThatThrownBy(() -> limits.assertWithin(accountId,
+        assertThatThrownBy(() -> limits.assertWithin(accountId, "INR",
                 new BigDecimal("400.00"), new BigDecimal("700.00")))
                 .isInstanceOf(LimitExceededException.class)
                 .extracting(ex -> ((LimitExceededException) ex).getCode())

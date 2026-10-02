@@ -89,7 +89,7 @@ public class HoldService {
         // holds would be a way around the daily ceiling entirely. Today's other outstanding holds
         // count alongside today's settled debits.
         Instant[] today = velocityLimits.todayBounds();
-        velocityLimits.assertWithin(accountId, amount,
+        velocityLimits.assertWithin(accountId, currency, amount,
                 holds.sumOutstandingPlacedBetween(accountId, today[0], today[1]));
 
         // Throws InsufficientFundsException when the available balance -- already net of other
