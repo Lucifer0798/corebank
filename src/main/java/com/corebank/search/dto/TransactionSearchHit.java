@@ -16,6 +16,11 @@ import java.util.List;
 public record TransactionSearchHit(
         String reference,
         TransactionType type,
+        /*
+         * Null on a document indexed before status existed. Read it as POSTED, the same rule the
+         * indexer applies to old messages -- a re-index from the admin replay endpoint fills it in.
+         */
+        com.corebank.transaction.domain.TransactionStatus status,
         BigDecimal amount,
         String currency,
         String description,

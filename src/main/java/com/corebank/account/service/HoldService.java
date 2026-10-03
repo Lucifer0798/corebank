@@ -13,6 +13,7 @@ import com.corebank.common.exception.ResourceNotFoundException;
 import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.service.ReferenceGenerator;
+import com.corebank.transaction.messaging.TransactionReversedEvent;
 import com.corebank.transaction.service.TransactionService;
 import com.corebank.transaction.service.VelocityLimits;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -178,6 +180,25 @@ public class HoldService {
     public Page<HoldResponse> listForAccount(UUID accountId, Pageable pageable) {
         accountService.require(accountId);
         return holds.findByAccountIdOrderByPlacedAtDesc(accountId, pageable).map(HoldResponse::from);
+    }
+
+    /**
+     * Brings a hold into line when the posting its capture produced is reversed.
+     *
+     * <p>A plain {@code @EventListener}, so it runs synchronously inside the reversal's own
+     * transaction: the hold and the ledger change together or not at all. Found by the captured
+     * reference rather than by account, deliberately -- an account can hold several captures and
+     * many unrelated withdrawals, and only the posting a capture actually produced belongs to it.
+     * Most reversals are of postings no hold produced, and those find nothing and do nothing.
+     */
+    @EventListener
+    public void onTransactionReversed(TransactionReversedEvent event) {
+        holds.findByCapturedTransactionReference(event.originalReference())
+                .ifPresent(hold -> {
+                    hold.markCaptureReversed(event.reversalReference());
+                    count("capture_reversed");
+                    log.info("Hold {} capture reversed by {}", hold.getReference(), event.reversalReference());
+                });
     }
 
     // --- The sweep --------------------------------------------------------------------------

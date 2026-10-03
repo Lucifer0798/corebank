@@ -22,7 +22,12 @@ public record HoldResponse(
         Instant settledAt,
 
         @Schema(description = "The posting a capture produced; null on anything that moved no money")
-        String capturedTransactionReference) {
+        String capturedTransactionReference,
+
+        @Schema(description = "The reversal that undid this hold's capture; null unless that happened. "
+                + "When set, the merchant's payment was taken back, though the capture reference above "
+                + "still names the posting that was made.")
+        String captureReversalReference) {
 
     public static HoldResponse from(AccountHold hold) {
         return new HoldResponse(
@@ -36,6 +41,7 @@ public record HoldResponse(
                 hold.getPlacedAt(),
                 hold.getExpiresAt(),
                 hold.getSettledAt(),
-                hold.getCapturedTransactionReference());
+                hold.getCapturedTransactionReference(),
+                hold.getCaptureReversalReference());
     }
 }

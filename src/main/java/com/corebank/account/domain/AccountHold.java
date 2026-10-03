@@ -78,6 +78,10 @@ public class AccountHold extends AuditableEntity {
     @Column(name = "captured_transaction_reference", length = 36)
     private String capturedTransactionReference;
 
+    /** The reversal that undid this hold's capture. Null unless that happened. */
+    @Column(name = "capture_reversal_reference", length = 36)
+    private String captureReversalReference;
+
     /**
      * Whether this hold can still be acted on, and if not, why not.
      *
@@ -102,6 +106,22 @@ public class AccountHold extends AuditableEntity {
         this.status = outcome;
         this.settledAt = at;
         this.capturedTransactionReference = transactionReference;
+    }
+
+    /**
+     * Records that the posting this hold captured into has been reversed.
+     *
+     * <p>Only a CAPTURED hold can get here -- a reversal finds its hold by the captured reference,
+     * which nothing else carries -- and the captured reference is kept, because the capture really
+     * did happen. What changes is that it no longer stands.
+     */
+    public void markCaptureReversed(String reversalReference) {
+        if (status != HoldStatus.CAPTURED) {
+            throw new IllegalStateException("Hold " + reference + " is " + status
+                    + ", so it has no capture to reverse");
+        }
+        this.status = HoldStatus.CAPTURE_REVERSED;
+        this.captureReversalReference = reversalReference;
     }
 
     public boolean hasExpiredBy(Instant now) {

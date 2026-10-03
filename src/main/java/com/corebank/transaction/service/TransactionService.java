@@ -17,6 +17,7 @@ import com.corebank.transaction.dto.StatementLineResponse;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.dto.TransferRequest;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
+import com.corebank.transaction.messaging.TransactionReversedEvent;
 import com.corebank.transaction.repository.BankTransactionRepository;
 import com.corebank.transaction.repository.LedgerEntryRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -244,7 +245,20 @@ public class TransactionService {
         original.getEntries().forEach(reversal::addReversingEntry);
         original.markReversed();
 
-        return post(reversal);
+        TransactionResponse posted = post(reversal);
+
+        // Everything derived from the original must now say it was reversed. The posting itself was
+        // always correct; what used to go stale was every record pointing at it.
+        //
+        // Downstream, through Kafka: the original goes out again carrying status REVERSED, keyed by
+        // the same reference. The search indexer upserts on that key, so the existing document is
+        // overwritten rather than duplicated, and the insights service upserts on (reference,
+        // account) with legs that have not changed -- so for it, this is a no-op.
+        eventPublisher.publishEvent(TransactionPostedEvent.from(original));
+        // In-process, within this transaction: records that point at the original by reference.
+        eventPublisher.publishEvent(new TransactionReversedEvent(original.getReference(), posted.reference()));
+
+        return posted;
     }
 
     @Transactional(readOnly = true)
