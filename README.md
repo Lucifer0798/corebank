@@ -388,6 +388,41 @@ Opening an account in a currency the bank holds no cash account in is refused wi
 `CURRENCY_NOT_SUPPORTED`. It used to check only the ISO shape, so a JPY account would open and then
 be dead for good: nothing could be deposited into it and nothing converted into it.
 
+### What a reversal tells everything else
+
+A reversal has always posted correctly; the balances were never wrong. What used to go stale was
+every record that pointed at the reversed posting and was never told about it:
+
+- **A hold whose capture was reversed** stayed `CAPTURED`, still naming the posting that had been
+  undone — so it went on claiming the merchant had been paid. It now becomes `CAPTURE_REVERSED`,
+  keeping the captured reference (the capture really happened) and adding the reversal that undid
+  it. Not `RELEASED`: the customer ends up in the same place, but a release means nothing moved
+  and a reversed capture means it moved and came back, and reconciling against the merchant
+  depends on knowing which.
+- **Search** kept showing the original as a live transaction. The original is now re-published
+  carrying status `REVERSED`, under the same reference. The indexer upserts on that key, so the
+  existing document is overwritten rather than joined by a second, contradictory hit, and search
+  results show a status column.
+
+Both travel from one place. `TransactionService.reverse` publishes the original again for
+downstream consumers, and an in-process `TransactionReversedEvent` for records that point at it by
+reference — so the transaction side never needs to know holds exist, and the next derived record
+does not need an edit there to stay truthful. The hold is updated inside the reversal's own
+transaction, so the two change together or not at all.
+
+`TransactionPostedEvent` gains a `status` field — the first change to that event since it was
+introduced. It is additive: the insights service reads fields by name and ignores extras, and it
+upserts on `(reference, account)` with legs that have not changed, so the re-published original is
+a no-op for it. A message from **before** the field existed deserializes with it null and is read
+as `POSTED` — nothing sent a status until now, and every earlier message described a transaction at
+the moment it was posted. Reading it any other way would let one old message fail an entire
+indexing batch.
+
+> **After deploying:** search documents written before this change carry no status, so a
+> transaction reversed earlier still reads as `POSTED`. Run the existing replay once —
+> `POST /api/v1/admin/outbox/replay/transactions` over the period in question — and each
+> transaction is re-published as it now stands.
+
 ### What can be reversed
 
 Reversal is for undoing what a customer or teller did — deposits, withdrawals and transfers — and
@@ -812,7 +847,7 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/fx/quote` | any | What an amount converts to: `from`, `to`, `amount` |
 | `GET` | `/api/v1/fx/position` | ADMIN | The bank's own currency exposure, valued into the reporting currency |
 | `POST` | `/api/v1/fx/revalue` | ADMIN | Mark the book to market, posting the change since the last close |
-| `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to` |
+| `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to`; each hit carries its `status` |
 | `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
 | `POST` | `/api/v1/admin/outbox/replay/transactions` | ADMIN | Re-enqueue transaction-posted events for `since`/`until` |
 | `POST` | `/api/v1/admin/outbox/replay/customers` | ADMIN | Re-enqueue customer-changed events for `since`/`until` |
