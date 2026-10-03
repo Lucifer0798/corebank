@@ -21,6 +21,13 @@ public interface AccountHoldRepository extends JpaRepository<AccountHold, UUID> 
     Optional<AccountHold> findByReference(String reference);
 
     /**
+     * The hold, if any, whose capture produced this posting. At most one: a capture writes exactly
+     * one posting and records its reference, so a reversal can find the hold it affects without the
+     * transaction side knowing holds exist.
+     */
+    Optional<AccountHold> findByCapturedTransactionReference(String capturedTransactionReference);
+
+    /**
      * Locks one hold for settlement. {@code SKIP LOCKED} is wrong here and deliberately absent:
      * a capture that cannot get the lock must wait for whatever is settling the hold and then see
      * the result, not skip it and report success having done nothing.

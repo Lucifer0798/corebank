@@ -116,6 +116,7 @@ function TransactionSearchTab() {
                   <th>Accounts</th>
                   <th>Description</th>
                   <th>Amount</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -129,11 +130,14 @@ function TransactionSearchTab() {
                     <td className="muted">{hit.accountNumbers.join(", ")}</td>
                     <td className="muted">{hit.description ?? "—"}</td>
                     <td className="amount">{formatAmount(hit.amount, hit.currency)}</td>
+                    {/* A reversed transaction is still a match -- it happened, and an auditor searching
+                        for it needs to find it -- but it must not read as money that is still moved. */}
+                    <td><StatusPill status={hit.status ?? "POSTED"} /></td>
                   </tr>
                 ))}
                 {data.hits.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="muted">No matches.</td>
+                    <td colSpan={7} className="muted">No matches.</td>
                   </tr>
                 )}
               </tbody>

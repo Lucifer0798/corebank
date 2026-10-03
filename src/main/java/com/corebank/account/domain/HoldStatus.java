@@ -14,7 +14,14 @@ public enum HoldStatus {
     /** Nobody captured it in time. Indistinguishable from a release to the balance, but not to
      *  whoever is reconciling later -- a merchant that habitually lets holds expire is a fact
      *  worth keeping. */
-    EXPIRED;
+    EXPIRED,
+
+    /**
+     * Captured, and then the capture posting was reversed: the money moved and came back. Distinct
+     * from RELEASED, which means nothing ever moved -- the customer ends up in the same place either
+     * way, but reconciling against the merchant depends on knowing which history it was.
+     */
+    CAPTURE_REVERSED;
 
     public boolean isOutstanding() {
         return this == ACTIVE;

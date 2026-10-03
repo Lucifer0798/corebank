@@ -140,6 +140,11 @@ export interface SearchResponse<T> {
 export interface TransactionSearchHit {
   reference: string;
   type: TransactionType;
+  /**
+   * Null on a document indexed before status existed -- read it as POSTED, the same rule the
+   * indexer applies. A replay from the admin endpoint fills it in.
+   */
+  status: "POSTED" | "REVERSED" | null;
   amount: number;
   currency: string;
   description: string | null;

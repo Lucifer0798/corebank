@@ -47,18 +47,35 @@ public class TransactionSearchIndexer {
     }
 
     private BulkOperation toBulkOperation(TransactionPostedEvent event) {
+        Map<String, Object> document = documentFor(event);
+        return BulkOperation.of(op -> op.index(idx -> idx
+                .index(SearchIndices.TRANSACTIONS)
+                .id(event.reference())
+                .document(document)));
+    }
+
+    /**
+     * The search document for one event.
+     *
+     * <p>{@code status} is new, and the reason a reversed transaction now reads as reversed: a
+     * reversal re-publishes the original carrying REVERSED, and because the document is keyed by
+     * reference this overwrites the one written when it was posted.
+     *
+     * <p>Read through {@code statusOrPosted()}, never {@code status()} directly. Messages already
+     * in the topic predate the field and deserialize with it null, and calling {@code name()} on
+     * that would fail the whole batch -- one old message holding up every new one behind it.
+     * Package-private so that case can be tested without a broker.
+     */
+    static Map<String, Object> documentFor(TransactionPostedEvent event) {
         List<String> accountNumbers = event.legs().stream().map(TransactionPostedEvent.Leg::accountNumber).toList();
-        Map<String, Object> document = Map.of(
+        return Map.of(
                 "reference", event.reference(),
                 "type", event.type().name(),
+                "status", event.statusOrPosted().name(),
                 "amount", event.amount(),
                 "currency", event.currency(),
                 "description", event.description() == null ? "" : event.description(),
                 "postedAt", event.postedAt().toString(),
                 "accountNumbers", accountNumbers);
-        return BulkOperation.of(op -> op.index(idx -> idx
-                .index(SearchIndices.TRANSACTIONS)
-                .id(event.reference())
-                .document(document)));
     }
 }
