@@ -26,7 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Turns a posting into what each affected customer is told.
  *
- * <p>Three decisions live here, each of which the obvious implementation gets wrong:
+ * <p>Four decisions live here, each of which the obvious implementation gets wrong:
  *
  * <ul>
  *   <li><strong>Once per message, however often it arrives.</strong> Kafka delivers at least once and
@@ -44,6 +44,10 @@ import org.springframework.transaction.annotation.Transactional;
  *       accounts and tells each its own side; general-ledger legs belong to the bank and tell nobody.
  *       Amounts are given in the account's currency, which on the receiving side of an FX transfer
  *       is not the transaction's.
+ *   <li><strong>Only what is happening now.</strong> The admin replay, and search rebuilding a lost
+ *       index, re-publish history through the same topic -- from the beginning of time, in the
+ *       rebuild's case. Those events are marked replayed and announce nothing, or a wiped OpenSearch
+ *       volume would alert every customer about every posting they ever had.
  * </ul>
  */
 @Service
@@ -67,6 +71,13 @@ public class NotificationService {
     /** Writes whatever this event should tell customers, and returns how many notifications that was. */
     @Transactional
     public int handle(TransactionPostedEvent event) {
+        if (event.wasReplayed()) {
+            // Re-derived from the ledger by a replay or a search-index rebuild, which can cover a
+            // bank's entire history. The posting may never have been announced -- interest, before
+            // it published at all -- but telling someone today about money that moved last month,
+            // as though it just had, is worse than never telling them.
+            return 0;
+        }
         if (event.type() == TransactionType.REVERSAL) {
             // Announced instead by the original's REVERSED re-publish -- see the class javadoc.
             return 0;

@@ -118,6 +118,23 @@ export interface StatementLine {
   postedAt: string;
 }
 
+/**
+ * Mirrors com.corebank.notification.dto.NotificationResponse. One per customer account a posting
+ * touched, written by the Kafka consumer -- so a fresh posting can take a moment to appear here.
+ */
+export interface Notification {
+  id: string;
+  accountId: string;
+  transactionReference: string;
+  /** REVERSED rows are a second notification about the same posting, not a replacement. */
+  transactionStatus: "POSTED" | "REVERSED";
+  direction: EntryDirection;
+  amount: number;
+  currency: string;
+  message: string;
+  createdAt: string;
+}
+
 /** The shape every CoreBank error response takes -- an RFC 7807 problem document. */
 export interface ProblemDetail {
   type: string;

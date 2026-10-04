@@ -9,6 +9,7 @@ import {
   useUpdateKyc,
 } from "../api/hooks";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { NotificationsCard } from "../components/Notifications";
 import { SpendingInsights } from "../components/SpendingInsights";
 import { StatusPill } from "../components/StatusPill";
 import { formatAmount } from "../format";
@@ -117,6 +118,8 @@ export function CustomerDetailPage() {
           </tbody>
         </table>
       </div>
+
+      <NotificationsCard customerId={customer.id} />
 
       <SpendingInsights customerId={customer.id} />
     </>

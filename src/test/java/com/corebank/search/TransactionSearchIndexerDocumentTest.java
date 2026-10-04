@@ -30,7 +30,8 @@ class TransactionSearchIndexerDocumentTest {
                 List.of(new TransactionPostedEvent.Leg("GL0000000001", EntryDirection.DEBIT,
                                 new BigDecimal("250.00"), new BigDecimal("250.00")),
                         new TransactionPostedEvent.Leg("100100000001", EntryDirection.CREDIT,
-                                new BigDecimal("250.00"), new BigDecimal("250.00"))));
+                                new BigDecimal("250.00"), new BigDecimal("250.00"))),
+                false);
     }
 
     @Test

@@ -29,6 +29,10 @@ import org.springframework.transaction.annotation.Transactional;
  * (the OpenSearch indexers, the Python insights projection) already upserts by the event's key
  * rather than appending, a property established when those consumers were first built, not
  * something this service adds.
+ *
+ * <p>Notifications are the exception, and the reason a replayed transaction event is marked as one.
+ * A projection rebuilt from a replay is the point; a customer alerted about every posting in the
+ * window is not. The notification consumer skips anything marked replayed.
  */
 @Service
 public class OutboxBackfillService {
@@ -57,7 +61,7 @@ public class OutboxBackfillService {
             slice = transactionRepository.findByPostedAtBetween(since, until, page);
             for (BankTransaction transaction : slice) {
                 outbox.write(OutboxAggregateType.TRANSACTION, TransactionEventPublisher.TOPIC,
-                        transaction.getReference(), TransactionPostedEvent.from(transaction));
+                        transaction.getReference(), TransactionPostedEvent.replayOf(transaction));
             }
             count += slice.getNumberOfElements();
             page = page.next();

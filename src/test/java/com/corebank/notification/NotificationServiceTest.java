@@ -13,15 +13,22 @@ import com.corebank.customer.service.CustomerService;
 import com.corebank.notification.dto.NotificationResponse;
 import com.corebank.notification.repository.NotificationRepository;
 import com.corebank.notification.service.NotificationService;
+import com.corebank.outbox.OutboxBackfillService;
+import com.corebank.outbox.domain.OutboxEvent;
+import com.corebank.outbox.repository.OutboxEventRepository;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.dto.ReversalRequest;
 import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.dto.TransferRequest;
+import com.corebank.transaction.messaging.TransactionEventPublisher;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
 import com.corebank.transaction.service.TransactionService;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,6 +38,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 
@@ -65,6 +73,12 @@ class NotificationServiceTest {
 
     @Autowired
     private InterestService interestService;
+
+    @Autowired
+    private OutboxBackfillService backfill;
+
+    @Autowired
+    private OutboxEventRepository outbox;
 
     @Autowired
     private ApplicationEvents events;
@@ -200,6 +214,42 @@ class NotificationServiceTest {
 
         assertThat(notificationsFor(asha)).extracting(NotificationResponse::message)
                 .anyMatch(message -> message.contains("interest paid into account " + masked(ashaAccount)));
+    }
+
+    @Test
+    @DisplayName("a replayed posting announces nothing -- it is history, not news")
+    void aReplayIsNotAnnounced() {
+        // Search rebuilding a lost index replays the whole ledger through this same topic. Treated as
+        // live, that alerts every customer about every posting they ever had. Driven through the
+        // real replay, the real outbox row and the consumer's own deserializer, so the flag is proven
+        // to survive the wire and not just to exist on the record.
+        TransactionResponse deposit = transactionService.deposit(ashaAccount,
+                new AmountRequest(new BigDecimal("500.00"), "INR", "Cash"), "nt-replay-" + n);
+        TransactionPostedEvent live = events.stream(TransactionPostedEvent.class).findFirst().orElseThrow();
+        events.clear();
+
+        Instant postedAt = live.postedAt();
+        backfill.replayTransactions(postedAt.minusSeconds(1), postedAt.plusSeconds(1));
+        TransactionPostedEvent replayed = newestOutboxEventFor(deposit.reference());
+
+        assertThat(notificationService.handle(replayed)).isZero();
+        assertThat(notifications.countByTransactionReference(deposit.reference())).isZero();
+
+        // And a replay leaves nothing behind that would stop the live message being announced.
+        assertThat(notificationService.handle(live)).isEqualTo(1);
+    }
+
+    /** Reads an outbox row back the way the consumer would receive it from Kafka. */
+    private TransactionPostedEvent newestOutboxEventFor(String reference) {
+        OutboxEvent row = outbox.findAll().stream()
+                .filter(event -> reference.equals(event.getEventKey()))
+                .max(Comparator.comparing(OutboxEvent::getCreatedAt))
+                .orElseThrow();
+        try (JsonDeserializer<TransactionPostedEvent> deserializer = new JsonDeserializer<>(TransactionPostedEvent.class)) {
+            deserializer.addTrustedPackages("com.corebank.transaction.messaging");
+            return deserializer.deserialize(TransactionEventPublisher.TOPIC,
+                    row.getPayload().getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     private String masked(UUID accountId) {
