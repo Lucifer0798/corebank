@@ -116,6 +116,20 @@ class OutboxBackfillServiceTest {
     }
 
     @Test
+    @DisplayName("marks what it replays, so a consumer can tell history from news")
+    void marksReplayedTransactionsAsReplayed() {
+        // Projections do not care, but notifications must: unmarked, a search-index rebuild would
+        // alert every customer about every posting they ever had.
+        when(transactionRepository.findByPostedAtBetween(eq(since), eq(until), any(Pageable.class)))
+                .thenReturn(onePage(List.of(transaction("TXN-1"))));
+
+        service().replayTransactions(since, until);
+
+        verify(outbox).write(eq(OutboxAggregateType.TRANSACTION), eq(TransactionEventPublisher.TOPIC),
+                eq("TXN-1"), argThat((TransactionPostedEvent event) -> event.wasReplayed()));
+    }
+
+    @Test
     @DisplayName("pages through more results than fit in a single page")
     void pagesThroughMultiplePages() {
         BankTransaction first = transaction("TXN-1");

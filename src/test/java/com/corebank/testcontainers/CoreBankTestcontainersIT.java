@@ -7,6 +7,7 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 
 import com.corebank.grpc.proto.AccountQueryServiceGrpc;
+import com.corebank.notification.repository.NotificationRepository;
 import com.corebank.search.SearchIndexInitializer;
 import com.corebank.grpc.proto.GetAccountRequest;
 import com.corebank.grpc.proto.GetTransactionRequest;
@@ -211,6 +212,9 @@ class CoreBankTestcontainersIT {
     @Autowired
     private SearchIndexInitializer searchIndexInitializer;
 
+    @Autowired
+    private NotificationRepository notificationRepository;
+
     private String tellerToken;
     private String adminToken;
     private String customerToken;
@@ -305,9 +309,10 @@ class CoreBankTestcontainersIT {
     @Order(3)
     @DisplayName("a posted transaction is actually published to and consumed from a real Kafka broker")
     void kafkaEventRoundTrip() {
-        // The application's own @KafkaListener already consumed and logged this posting as a
-        // side effect of the previous test; a fresh consumer proves the message really landed
-        // on the real broker rather than trusting that side effect alone.
+        // The application's own listeners already consumed this posting as a side effect of the
+        // previous test; a fresh consumer proves the message really landed on the real broker
+        // rather than trusting that side effect alone. Order(10) proves the notification
+        // consumer's side end to end.
         try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<String, String>(Map.of(
                 org.apache.kafka.clients.consumer.ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
                 org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG, "tc-verify-" + UUID.randomUUID(),
@@ -731,6 +736,79 @@ class CoreBankTestcontainersIT {
                 .get("/accounts/{id}/balance", accountId)
                 .then().statusCode(200)
                 .body("balance", equalTo(expectedBalance.floatValue()));
+    }
+
+    @Test
+    @Order(10)
+    @DisplayName("a deposit reaches its owner as a notification over real Kafka, and a replay of it does not")
+    void notificationsArriveOverRealKafkaAndReplaysDoNot() {
+        // Everything NotificationServiceTest cannot reach: the real listener, its consumer group and
+        // deserializer, and the replayed flag surviving a real broker rather than an in-memory row.
+        String customerId = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("firstName", "Notify", "lastName", "Verification",
+                        "email", "tc-notify-" + UUID.randomUUID() + "@example.com", "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201).extract().path("id");
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON).body(Map.of("kycStatus", "VERIFIED"))
+                .patch("/customers/{id}/kyc", customerId)
+                .then().statusCode(200);
+        var account = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON).body(Map.of("customerId", customerId, "accountType", "SAVINGS"))
+                .post("/accounts")
+                .then().statusCode(201).extract();
+        String accountId = account.path("id");
+        String accountNumber = account.path("accountNumber");
+        String masked = "XXXX" + accountNumber.substring(accountNumber.length() - 4);
+
+        var deposit = given().header("Authorization", "Bearer " + adminToken)
+                .header("Idempotency-Key", "tc-notify-deposit-" + UUID.randomUUID())
+                .contentType(ContentType.JSON).body(Map.of("amount", 500.00, "description", "Notify"))
+                .post("/accounts/{id}/deposits", accountId)
+                .then().statusCode(201).extract();
+        String reference = deposit.path("reference");
+        java.time.Instant postedAt = java.time.Instant.parse(deposit.path("postedAt"));
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .get("/customers/{id}/notifications", customerId)
+                        .then().statusCode(200)
+                        .body("totalElements", equalTo(1))
+                        .body("content[0].message", equalTo("500.00 INR credited to account " + masked)));
+
+        // Forget it was ever announced -- the position of every posting from before notifications
+        // existed, and of interest before it published at all. Without this the replayed copy would
+        // hit the dedupe key and be a no-op whether or not replays are skipped, proving nothing.
+        notificationRepository.deleteAll(notificationRepository.findAll().stream()
+                .filter(notification -> reference.equals(notification.getTransactionReference()))
+                .toList());
+
+        // Replay the deposit, then reverse it. Both are keyed by the deposit's reference, so they
+        // share its partition and are consumed in this order: once the reversal is announced, the
+        // replayed copy has been read too -- and absence is proven by ordering, not by waiting.
+        given().header("Authorization", "Bearer " + adminToken)
+                .queryParam("since", postedAt.minusSeconds(1).toString())
+                .queryParam("until", postedAt.plusSeconds(1).toString())
+                .post("/admin/outbox/replay/transactions")
+                .then().statusCode(200);
+        given().header("Authorization", "Bearer " + adminToken)
+                .header("Idempotency-Key", "tc-notify-reversal-" + UUID.randomUUID())
+                .contentType(ContentType.JSON).body(Map.of("reason", "Testcontainers reversal"))
+                .post("/transactions/{reference}/reversal", reference)
+                .then().statusCode(201);
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .get("/customers/{id}/notifications", customerId)
+                        .then().statusCode(200)
+                        .body("content[0].message",
+                                equalTo("A credit of 500.00 INR to account " + masked + " was reversed")));
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .get("/customers/{id}/notifications", customerId)
+                .then().statusCode(200)
+                .body("totalElements", equalTo(1));
     }
 
     private static ClientInterceptor bearer(String token) {

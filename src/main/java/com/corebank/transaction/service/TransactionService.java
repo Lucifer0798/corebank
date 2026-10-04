@@ -285,6 +285,21 @@ public class TransactionService {
         return entries.findStatement(accountId, lower, upper, sorted).map(StatementLineResponse::from);
     }
 
+    /**
+     * The way a posting built outside this class becomes a real one -- interest capitalisation and
+     * FX revaluation today.
+     *
+     * <p>It exists because both of those used to save their transaction directly, and so skipped
+     * everything {@link #post} does besides saving. Neither ever published an event: interest never
+     * reached Kafka, so it was invisible in search, unseen by the insights service and, once
+     * notifications existed, would have been announced to nobody. Neither recorded the transaction
+     * metrics either. The bug was not in either service's arithmetic; it was having a second road
+     * to the ledger that did not go past the same checkpoints. There is now one.
+     */
+    public TransactionResponse postSystemTransaction(BankTransaction transaction) {
+        return post(transaction);
+    }
+
     private TransactionResponse post(BankTransaction transaction) {
         transaction.assertBalanced();
         BankTransaction saved = transactions.save(transaction);

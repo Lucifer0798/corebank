@@ -76,6 +76,8 @@ function TransactionSearchTab() {
                 <option value="WITHDRAWAL">Withdrawal</option>
                 <option value="TRANSFER">Transfer</option>
                 <option value="REVERSAL">Reversal</option>
+                <option value="INTEREST">Interest</option>
+                <option value="FX_REVALUATION">FX revaluation</option>
               </select>
             </div>
             <div className="form-row">

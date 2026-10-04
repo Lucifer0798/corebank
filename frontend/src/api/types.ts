@@ -6,7 +6,11 @@ export type CustomerStatus = "ACTIVE" | "SUSPENDED" | "CLOSED";
 export type AccountType = "SAVINGS" | "CURRENT";
 export type AccountStatus = "ACTIVE" | "FROZEN" | "CLOSED";
 export type EntryDirection = "DEBIT" | "CREDIT";
-export type TransactionType = "DEPOSIT" | "WITHDRAWAL" | "TRANSFER" | "REVERSAL";
+// Mirrors com.corebank.transaction.domain.TransactionType. INTEREST (#35) and FX_REVALUATION
+// (#37) were missing for a while: statements already showed INTEREST lines, and once system
+// postings started reaching Kafka they could appear in search too.
+export type TransactionType =
+  | "DEPOSIT" | "WITHDRAWAL" | "TRANSFER" | "REVERSAL" | "INTEREST" | "FX_REVALUATION";
 
 export interface PagedResponse<T> {
   content: T[];
@@ -112,6 +116,23 @@ export interface StatementLine {
   balanceAfter: number;
   description: string | null;
   postedAt: string;
+}
+
+/**
+ * Mirrors com.corebank.notification.dto.NotificationResponse. One per customer account a posting
+ * touched, written by the Kafka consumer -- so a fresh posting can take a moment to appear here.
+ */
+export interface Notification {
+  id: string;
+  accountId: string;
+  transactionReference: string;
+  /** REVERSED rows are a second notification about the same posting, not a replacement. */
+  transactionStatus: "POSTED" | "REVERSED";
+  direction: EntryDirection;
+  amount: number;
+  currency: string;
+  message: string;
+  createdAt: string;
 }
 
 /** The shape every CoreBank error response takes -- an RFC 7807 problem document. */

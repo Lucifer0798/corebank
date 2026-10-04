@@ -10,7 +10,7 @@ import com.corebank.fx.dto.FxPositionReport;
 import com.corebank.transaction.domain.BankTransaction;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.domain.TransactionType;
-import com.corebank.transaction.repository.BankTransactionRepository;
+import com.corebank.transaction.service.TransactionService;
 import com.corebank.transaction.service.ReferenceGenerator;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
@@ -51,7 +51,7 @@ public class FxPositionService {
 
     private final AccountRepository accounts;
     private final AccountService accountService;
-    private final BankTransactionRepository transactions;
+    private final TransactionService transactionService;
     private final FxRateService fxRateService;
     private final ReferenceGenerator referenceGenerator;
     private final MeterRegistry meterRegistry;
@@ -59,14 +59,14 @@ public class FxPositionService {
 
     public FxPositionService(AccountRepository accounts,
                              AccountService accountService,
-                             BankTransactionRepository transactions,
+                             TransactionService transactionService,
                              FxRateService fxRateService,
                              ReferenceGenerator referenceGenerator,
                              MeterRegistry meterRegistry,
                              Clock clock) {
         this.accounts = accounts;
         this.accountService = accountService;
-        this.transactions = transactions;
+        this.transactionService = transactionService;
         this.fxRateService = fxRateService;
         this.referenceGenerator = referenceGenerator;
         this.meterRegistry = meterRegistry;
@@ -140,13 +140,14 @@ public class FxPositionService {
             transaction.addEntry(gainLoss, EntryDirection.DEBIT, delta.abs());
             transaction.addEntry(reserve, EntryDirection.CREDIT, delta.abs());
         }
-        transaction.assertBalanced();
 
-        BankTransaction saved = transactions.save(transaction);
+        // Through the one road to the ledger. Saving directly used to skip the event, so a
+        // revaluation never reached search or any downstream consumer, and skipped the metrics.
+        String reference = transactionService.postSystemTransaction(transaction).reference();
         meterRegistry.counter("corebank.fx.revaluations").increment();
         log.info("Revalued the FX book to {} {} ({} {})",
                 target, REPORTING_CURRENCY, delta.signum() > 0 ? "+" + delta : delta, REPORTING_CURRENCY);
-        return Optional.of(saved.getReference());
+        return Optional.of(reference);
     }
 
     /** What the reserve account currently says the book is worth. */

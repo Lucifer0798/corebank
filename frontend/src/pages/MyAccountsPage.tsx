@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useAccountsForCustomer, useMyCustomer } from "../api/hooks";
 import { ApiError } from "../api/client";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { NotificationsCard } from "../components/Notifications";
 import { SpendingInsights } from "../components/SpendingInsights";
 import { StatusPill } from "../components/StatusPill";
 import { formatAmount } from "../format";
@@ -70,6 +71,8 @@ export function MyAccountsPage() {
           </tbody>
         </table>
       </div>
+
+      <NotificationsCard />
 
       <SpendingInsights customerId={customer.id} />
     </>

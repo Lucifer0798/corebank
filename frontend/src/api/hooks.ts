@@ -7,6 +7,7 @@ import type {
   Customer,
   CustomerSearchHit,
   KycStatus,
+  Notification,
   PagedResponse,
   ScheduleFrequency,
   ScheduledTransfer,
@@ -349,6 +350,23 @@ function invalidateSchedules(
   for (const id of [schedule.sourceAccountId, schedule.destinationAccountId]) {
     queryClient.invalidateQueries({ queryKey: ["scheduledTransfers", id] });
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Notifications -- what a customer was told about money moving. Written asynchronously off Kafka,
+// so a posting made a moment ago may not be listed yet; a short refetch interval covers that.
+// ---------------------------------------------------------------------------------------------
+
+/** Without a customerId, the signed-in customer's own (CUSTOMER role); with one, that customer's
+ * as staff see them (TELLER/ADMIN). */
+export function useNotifications(customerId: string | undefined, page: number) {
+  const api = useApi();
+  const path = customerId ? `/customers/${customerId}/notifications` : "/customers/me/notifications";
+  return useQuery({
+    queryKey: ["notifications", customerId ?? "me", page],
+    queryFn: () => api.get<PagedResponse<Notification>>(path, { page, size: 10 }),
+    refetchInterval: 30_000,
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

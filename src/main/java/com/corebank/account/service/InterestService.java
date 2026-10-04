@@ -10,7 +10,7 @@ import com.corebank.config.CoreBankProperties;
 import com.corebank.transaction.domain.BankTransaction;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.domain.TransactionType;
-import com.corebank.transaction.repository.BankTransactionRepository;
+import com.corebank.transaction.service.TransactionService;
 import com.corebank.transaction.service.ReferenceGenerator;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
@@ -51,7 +51,7 @@ public class InterestService {
     static final int BATCH_SIZE = 200;
 
     private final AccountRepository accounts;
-    private final BankTransactionRepository transactions;
+    private final TransactionService transactionService;
     private final AccountService accountService;
     private final ReferenceGenerator referenceGenerator;
     private final CoreBankProperties.Interest properties;
@@ -59,14 +59,14 @@ public class InterestService {
     private final Clock clock;
 
     public InterestService(AccountRepository accounts,
-                           BankTransactionRepository transactions,
+                           TransactionService transactionService,
                            AccountService accountService,
                            ReferenceGenerator referenceGenerator,
                            CoreBankProperties properties,
                            MeterRegistry meterRegistry,
                            Clock clock) {
         this.accounts = accounts;
-        this.transactions = transactions;
+        this.transactionService = transactionService;
         this.accountService = accountService;
         this.referenceGenerator = referenceGenerator;
         this.properties = properties.interest();
@@ -144,13 +144,15 @@ public class InterestService {
         // Expense first, mirroring how a deposit debits cash before crediting the customer.
         transaction.addEntry(expense, EntryDirection.DEBIT, payable);
         transaction.addEntry(account, EntryDirection.CREDIT, payable);
-        transaction.assertBalanced();
 
-        BankTransaction saved = transactions.save(transaction);
-        accountService.evictCache(accountId);
+        // Through the one road to the ledger, not straight to the repository. Saving directly used
+        // to skip the event -- so interest never reached search, the insights service or a
+        // notification -- and the metrics, and the cache eviction for the expense account. post()
+        // balances the transaction itself, so that check is not repeated here.
+        String reference = transactionService.postSystemTransaction(transaction).reference();
         meterRegistry.counter("corebank.interest.capitalised").increment();
         log.info("Capitalised {} of interest on account {}", payable, accountId);
-        return java.util.Optional.of(saved.getReference());
+        return java.util.Optional.of(reference);
     }
 
     /** Savings accounts with something whole to pay. Drives the monthly capitalisation run. */

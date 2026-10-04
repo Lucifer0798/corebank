@@ -28,7 +28,17 @@ public record TransactionPostedEvent(
         String currency,
         String description,
         Instant postedAt,
-        List<Leg> legs) {
+        List<Leg> legs,
+        /*
+         * True when this was re-derived from the ledger by OutboxBackfillService -- the admin replay,
+         * or search rebuilding a lost index -- rather than published as the posting happened. Null on
+         * any message from before the field existed, and read as false: every one of those was live.
+         *
+         * Projections do not care; they upsert by key and a replay is exactly what they are for. A
+         * notification does: it tells a person something just happened, and a replay is weeks-old
+         * news delivered as though it were new.
+         */
+        Boolean replayed) {
 
     public record Leg(String accountNumber, EntryDirection direction, BigDecimal amount, BigDecimal balanceAfter) {
 
@@ -46,7 +56,22 @@ public record TransactionPostedEvent(
         return status == null ? TransactionStatus.POSTED : status;
     }
 
+    /** Whether this was re-derived after the fact. Not named like a getter, so it never serializes. */
+    public boolean wasReplayed() {
+        return Boolean.TRUE.equals(replayed);
+    }
+
+    /** The event a posting publishes as it happens. */
     public static TransactionPostedEvent from(BankTransaction transaction) {
+        return of(transaction, false);
+    }
+
+    /** The same event re-derived from the ledger later, marked so a consumer can tell the two apart. */
+    public static TransactionPostedEvent replayOf(BankTransaction transaction) {
+        return of(transaction, true);
+    }
+
+    private static TransactionPostedEvent of(BankTransaction transaction, boolean replayed) {
         return new TransactionPostedEvent(
                 transaction.getReference(),
                 transaction.getType(),
@@ -55,6 +80,7 @@ public record TransactionPostedEvent(
                 transaction.getCurrency(),
                 transaction.getDescription(),
                 transaction.getPostedAt(),
-                transaction.getEntries().stream().map(Leg::from).toList());
+                transaction.getEntries().stream().map(Leg::from).toList(),
+                replayed);
     }
 }
