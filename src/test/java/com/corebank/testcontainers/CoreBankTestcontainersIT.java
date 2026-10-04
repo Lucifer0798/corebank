@@ -7,6 +7,7 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 
 import com.corebank.grpc.proto.AccountQueryServiceGrpc;
+import com.corebank.notification.repository.NotificationRepository;
 import com.corebank.search.SearchIndexInitializer;
 import com.corebank.grpc.proto.GetAccountRequest;
 import com.corebank.grpc.proto.GetTransactionRequest;
@@ -210,6 +211,9 @@ class CoreBankTestcontainersIT {
 
     @Autowired
     private SearchIndexInitializer searchIndexInitializer;
+
+    @Autowired
+    private NotificationRepository notificationRepository;
 
     private String tellerToken;
     private String adminToken;
@@ -773,6 +777,13 @@ class CoreBankTestcontainersIT {
                         .body("totalElements", equalTo(1))
                         .body("content[0].message", equalTo("500.00 INR credited to account " + masked)));
 
+        // Forget it was ever announced -- the position of every posting from before notifications
+        // existed, and of interest before it published at all. Without this the replayed copy would
+        // hit the dedupe key and be a no-op whether or not replays are skipped, proving nothing.
+        notificationRepository.deleteAll(notificationRepository.findAll().stream()
+                .filter(notification -> reference.equals(notification.getTransactionReference()))
+                .toList());
+
         // Replay the deposit, then reverse it. Both are keyed by the deposit's reference, so they
         // share its partition and are consumed in this order: once the reversal is announced, the
         // replayed copy has been read too -- and absence is proven by ordering, not by waiting.
@@ -797,7 +808,7 @@ class CoreBankTestcontainersIT {
         given().header("Authorization", "Bearer " + tellerToken)
                 .get("/customers/{id}/notifications", customerId)
                 .then().statusCode(200)
-                .body("totalElements", equalTo(2));
+                .body("totalElements", equalTo(1));
     }
 
     private static ClientInterceptor bearer(String token) {
