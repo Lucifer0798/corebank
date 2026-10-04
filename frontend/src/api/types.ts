@@ -6,7 +6,11 @@ export type CustomerStatus = "ACTIVE" | "SUSPENDED" | "CLOSED";
 export type AccountType = "SAVINGS" | "CURRENT";
 export type AccountStatus = "ACTIVE" | "FROZEN" | "CLOSED";
 export type EntryDirection = "DEBIT" | "CREDIT";
-export type TransactionType = "DEPOSIT" | "WITHDRAWAL" | "TRANSFER" | "REVERSAL";
+// Mirrors com.corebank.transaction.domain.TransactionType. INTEREST (#35) and FX_REVALUATION
+// (#37) were missing for a while: statements already showed INTEREST lines, and once system
+// postings started reaching Kafka they could appear in search too.
+export type TransactionType =
+  | "DEPOSIT" | "WITHDRAWAL" | "TRANSFER" | "REVERSAL" | "INTEREST" | "FX_REVALUATION";
 
 export interface PagedResponse<T> {
   content: T[];

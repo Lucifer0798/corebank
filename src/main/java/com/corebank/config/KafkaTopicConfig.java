@@ -9,7 +9,7 @@ import org.springframework.kafka.config.TopicBuilder;
 
 /**
  * Both topics were left to Kafka's own auto-create default (this broker's {@code num.partitions}
- * is 1), which meant every consumer of either one -- {@code TransactionEventLogger},
+ * is 1), which meant every consumer of either one -- {@code NotificationConsumer},
  * {@code TransactionSearchIndexer}, {@code CustomerSearchIndexer} -- had exactly one partition to
  * share, so raising a listener's concurrency past 1 (see {@code KafkaConsumerConfig}) was a pure
  * no-op: Kafka can only assign a partition to one consumer per group at a time.

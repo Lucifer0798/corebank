@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * Indexes every posted transaction into OpenSearch, keyed by the transaction reference so a
  * redelivered message overwrites rather than duplicates. Its own consumer group, separate from
- * {@code TransactionEventLogger}'s -- two independent consumers of the same topic, each with its
+ * {@code NotificationConsumer}'s -- two independent consumers of the same topic, each with its
  * own offset, is the normal Kafka pattern for adding a second thing that cares about a topic
  * without touching the first.
  *
