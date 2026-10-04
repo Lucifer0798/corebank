@@ -39,11 +39,12 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Security | Keycloak-issued JWTs, three realm roles. Customers can read only their own accounts. |
 | Caching | Account detail reads go through Redis with a short TTL; a Redis outage just means no caching. |
 | Events | Every posted transaction is published to Kafka once its database transaction commits. |
+| Notifications | Each customer is told when money moves on their account -- once per posting, even when Kafka delivers the message twice. |
 | Search | Bank-wide, cross-account transaction and customer search (OpenSearch), fed by the same Kafka events -- not the per-account statement or unfiltered customer list, both Postgres-backed. |
 | gRPC | A read-only service-to-service surface (accounts, transactions, streamed statements) over the same service layer and the same Keycloak tokens as REST. |
 | Spending insights | A separate Python service categorises each posting off the Kafka feed and serves per-customer spending summaries. Read-only: it never writes to the ledger. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
-| Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements, standing instructions, and admin-only reversals. |
+| Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements, standing instructions, notifications, and admin-only reversals. |
 | Observability | Every request traced end to end (OpenTelemetry/Tempo); business and platform metrics in Grafana. |
 | CI | Every push builds and tests the backend and frontend, scans the Docker image with Trivy, and runs CodeQL. |
 | Docs | Swagger UI at `/swagger-ui.html`, OpenAPI JSON at `/v3/api-docs`. |
@@ -651,9 +652,9 @@ outage degrades to "no caching," never to a 500.
 ### Events
 
 Every posted transaction ends up on the `corebank.transactions.posted` Kafka topic; a customer
-create or KYC/identity change ends up on `corebank.customers.changed`. A demo `@KafkaListener`
-logs what it consumes; Phase 5's OpenSearch indexer and the Python insights service are the real
-consumers — see Search and Spending insights below.
+create or KYC/identity change ends up on `corebank.customers.changed`. The consumers are customer
+notifications, the OpenSearch indexers and the Python insights service — see Notifications, Search
+and Spending insights below.
 
 Getting an event onto Kafka is a two-step, transactional-outbox handoff, not a direct send.
 `TransactionEventPublisher`/`CustomerEventPublisher` listen for the domain event with a plain
@@ -679,6 +680,55 @@ ledger/customer tables and writing it through the exact same outbox path a live 
 `.../replay/customers?since=&until=` (see API below). Both are safe to run more than once over
 the same window, since every downstream consumer already upserts by the event's key rather than
 appending.
+
+### Notifications
+
+A customer is told when money moves on one of their accounts: "500.00 INR credited to account
+XXXX0001". `NotificationConsumer` reads `corebank.transactions.posted` and writes one row per
+customer account a posting touched; the bank's own GL legs are nobody's to be told about. The
+customer reads theirs at `GET /api/v1/customers/me/notifications`, and staff read any customer's —
+the first thing to check when someone says they were never told about a payment. Both pages in the
+frontend show the list.
+
+**Each one is written once.** Kafka delivers at least once and the outbox relay retries a send it
+is unsure of, so the same message can arrive twice. The table carries a unique key on
+`(transaction reference, account, status)`, and the consumer checks it before writing, so a
+redelivery is a quiet no-op. Without the check, it would be a constraint violation: the listener
+fails, retries, logs an error and skips the record. That is a false alarm on every redelivery. Messages are keyed by reference, so every copy of one lands on the same
+partition and is handled by the same thread, never two at once.
+
+**A reversal is announced once.** Reversing a posting publishes three events: the original, the
+correcting `REVERSAL` posting, and the original again carrying `REVERSED`. Announcing all three
+would tell the customer "500.00 INR debited" and "your credit was reversed" about one correction.
+The `REVERSAL` posting is skipped, and the re-published original becomes "A credit of 500.00 INR to
+account XXXX0001 was reversed". Its status is part of the unique key, so it sits beside the original
+notification rather than colliding with it.
+
+**Each side of an FX transfer hears its own currency.** The transaction's currency is the
+sender's, so a dollar account told it received rupees would be told nonsense. Each notification
+takes its account's currency and its own leg's amount.
+
+Account numbers are masked to the last four digits. The message is rendered once, when the row is
+written, and stored. It is the record of what the customer was told, so it cannot later be
+re-derived into something different.
+
+The consumer took over the `corebank-app` consumer group from the demo listener it replaced, which
+only logged what it read. A fresh group starts from the earliest offset (`auto-offset-reset:
+earliest`), and would have replayed the topic's whole retention as a burst of alerts about old
+postings. Keeping the group means it resumes where the logger stopped.
+
+**Interest and FX revaluation now reach Kafka.** Building this showed they never had. Both saved
+their posting straight to the repository instead of through `TransactionService`, so neither
+published an event. Interest never reached search, the insights service or a notification. The
+cache for the interest expense account was never evicted. Neither showed in the posting metrics.
+Both now go through the same path as every other posting. Earlier ones can be backfilled into
+search and insights with the existing replay endpoint, and that does not notify — see below.
+
+**A replay announces nothing.** The admin replay and search rebuilding a lost index both re-publish
+history through this same topic — the rebuild from the beginning of time. Treated as live, a wiped
+OpenSearch volume would alert every customer about every posting they had ever made. Replayed
+events carry `replayed: true` and the consumer skips them. Like `status`, the field is additive: a
+message from before it existed has no value, which reads as live, and every such message was.
 
 ### Search
 
@@ -821,6 +871,8 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/customers/{id}` | TELLER, ADMIN | Fetch one customer |
 | `GET` | `/api/v1/customers/me` | CUSTOMER | Resolve the caller's own customer record |
 | `PATCH` | `/api/v1/customers/{id}/kyc` | ADMIN | Record a KYC decision |
+| `GET` | `/api/v1/customers/me/notifications` | CUSTOMER | What the caller has been told, newest first |
+| `GET` | `/api/v1/customers/{id}/notifications` | TELLER, ADMIN | What a customer has been told, newest first |
 | `PATCH` | `/api/v1/customers/{id}/identity` | TELLER, ADMIN | Link a Keycloak identity to this customer |
 | `POST` | `/api/v1/accounts` | TELLER, ADMIN | Open an account |
 | `GET` | `/api/v1/accounts/{id}` | owner, staff | Fetch one account (cached) |
@@ -920,6 +972,7 @@ corebank/
 │   ├── customer/      Onboarding, KYC, Keycloak identity linking
 │   ├── transaction/   Postings, the ledger, statements, Kafka publishing
 │   ├── idempotency/   Replay protection for money movement
+│   ├── notification/  Customer notifications, written once per posting off Kafka
 │   ├── search/        OpenSearch indexers (Kafka-fed) and the /search API
 │   ├── grpc/          gRPC services, auth and error interceptors, proto mapping
 │   ├── common/        Money, audit columns, errors, sequences
