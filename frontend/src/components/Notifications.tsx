@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useNotifications } from "../api/hooks";
+import type { Notification } from "../api/types";
 import { formatDateTime } from "../format";
 import { ErrorBanner } from "./ErrorBanner";
 import { StatusPill } from "./StatusPill";
@@ -12,6 +13,10 @@ import { StatusPill } from "./StatusPill";
  * looking at what that customer was told -- the first thing to check when someone says they never
  * heard about a payment. Only the staff view links the reference: a customer opening a transaction
  * gets the backend's 403, so a link there would be a dead end.
+ *
+ * <p>A missed standing-instruction payment has no transaction behind it, so it links to the account
+ * page instead, where the instruction itself is listed -- a page both the customer and staff can
+ * open.
  *
  * <p>The message is shown exactly as the backend wrote it. It is what the customer read, and
  * re-deriving it here from the amount and direction would make this list able to disagree with it.
@@ -40,15 +45,17 @@ export function NotificationsCard({ customerId }: { customerId?: string }) {
               <td>{formatDateTime(notification.createdAt)}</td>
               <td>
                 {notification.message}
-                {notification.transactionStatus === "REVERSED" && (
+                {pillFor(notification) && (
                   <>
                     {" "}
-                    <StatusPill status="REVERSED" />
+                    <StatusPill status={pillFor(notification) as string} />
                   </>
                 )}
               </td>
               <td>
-                {staffView ? (
+                {notification.kind !== "TRANSACTION" ? (
+                  <Link to={`/accounts/${notification.accountId}`}>Standing instruction</Link>
+                ) : staffView ? (
                   <Link to={`/transactions/${notification.transactionReference}`}>
                     {notification.transactionReference}
                   </Link>
@@ -76,4 +83,16 @@ export function NotificationsCard({ customerId }: { customerId?: string }) {
       </div>
     </div>
   );
+}
+
+/** The marker that stops a row reading as an ordinary payment: a correction, or money that never moved. */
+function pillFor(notification: Notification): string | null {
+  switch (notification.kind) {
+    case "SCHEDULED_TRANSFER_FAILED":
+      return "FAILED";
+    case "SCHEDULED_TRANSFER_SUSPENDED":
+      return "SUSPENDED";
+    default:
+      return notification.transactionStatus === "REVERSED" ? "REVERSED" : null;
+  }
 }

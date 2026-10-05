@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useCancelScheduledTransfer,
   useCreateScheduledTransfer,
+  useResumeScheduledTransfer,
   useScheduledTransfers,
 } from "../api/hooks";
 import type { Account, PagedResponse, ScheduledTransfer } from "../api/types";
@@ -17,12 +18,14 @@ vi.mock("../api/hooks", () => ({
   useScheduledTransfers: vi.fn(),
   useCancelScheduledTransfer: vi.fn(),
   useCreateScheduledTransfer: vi.fn(),
+  useResumeScheduledTransfer: vi.fn(),
 }));
 
 const ACCOUNT_ID = "11111111-1111-1111-1111-111111111111";
 const OTHER_ID = "22222222-2222-2222-2222-222222222222";
 
 const cancelMutate = vi.fn();
+const resumeMutate = vi.fn();
 
 function account(): Account {
   return {
@@ -76,6 +79,12 @@ function listing(content: ScheduledTransfer[]) {
 
 beforeEach(() => {
   cancelMutate.mockClear();
+  resumeMutate.mockClear();
+  vi.mocked(useResumeScheduledTransfer).mockReturnValue({
+    mutate: resumeMutate,
+    isPending: false,
+    error: null,
+  } as unknown as ReturnType<typeof useResumeScheduledTransfer>);
   vi.mocked(useCancelScheduledTransfer).mockReturnValue({
     mutate: cancelMutate,
     isPending: false,
@@ -117,13 +126,13 @@ describe("ScheduledTransfersCard", () => {
   it("surfaces a failing mandate instead of leaving it looking healthy", () => {
     listing([schedule({
       consecutiveFailures: 2,
-      lastError: "Account 100100000001 has 50.0000 available but 750.0000 was requested",
+      lastError: "There was not enough money in the account (750.00 INR was due).",
     })]);
 
     render(<ScheduledTransfersCard account={account()} staff />);
 
     expect(screen.getByText(/2 attempts failed/)).toBeTruthy();
-    expect(screen.getByText(/750.0000 was requested/)).toBeTruthy();
+    expect(screen.getByText(/750.00 INR was due/)).toBeTruthy();
   });
 
   it("offers Cancel on a live mandate and not on a stopped one", () => {
@@ -137,6 +146,30 @@ describe("ScheduledTransfersCard", () => {
     // One button, not two: the backend refuses cancelling a stopped mandate, so offering it
     // would produce an error the user could not have avoided.
     expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(1);
+  });
+
+  it("offers staff Resume on a suspended mandate, and nothing else gets one", () => {
+    listing([
+      schedule({ id: "stopped", status: "SUSPENDED", nextRunOn: null, consecutiveFailures: 3 }),
+      schedule({ id: "live", status: "ACTIVE" }),
+      schedule({ id: "cancelled", status: "CANCELLED", nextRunOn: null }),
+    ]);
+
+    render(<ScheduledTransfersCard account={account()} staff />);
+
+    const resume = screen.getAllByRole("button", { name: "Resume" });
+    expect(resume).toHaveLength(1);
+    resume[0].click();
+    expect(resumeMutate).toHaveBeenCalledWith("stopped");
+  });
+
+  it("gives a customer no Resume button either", () => {
+    listing([schedule({ status: "SUSPENDED", nextRunOn: null, consecutiveFailures: 3 })]);
+
+    render(<ScheduledTransfersCard account={account()} staff={false} />);
+
+    // Resuming is a staff decision -- the backend allows TELLER and ADMIN only.
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
   });
 
   it("gives a customer no Cancel button and no create form", () => {

@@ -20,7 +20,7 @@ export function scheduleAttention(schedule: ScheduledTransfer): ScheduleAttentio
       message:
         `Stopped after ${plural(schedule.consecutiveFailures, "failed attempt")}. ` +
         (schedule.lastError ?? "No reason was recorded.") +
-        " Set up a replacement once the problem is fixed -- a suspended instruction cannot be restarted.",
+        " Once the problem is fixed, staff can resume it from its next date.",
     };
   }
   if (schedule.status === "ACTIVE" && schedule.consecutiveFailures > 0) {
@@ -32,6 +32,15 @@ export function scheduleAttention(schedule: ScheduledTransfer): ScheduleAttentio
     };
   }
   return { level: "none" };
+}
+
+/**
+ * Only a suspended mandate can be resumed. Offered even when the backend may still refuse -- a
+ * one-off, or one past its end date, has nothing left to run -- because working that out here would
+ * duplicate the timetable rules, and the 422 explains itself.
+ */
+export function canResume(schedule: ScheduledTransfer): boolean {
+  return schedule.status === "SUSPENDED";
 }
 
 /** Only a live mandate can be stopped; the backend refuses the rest with SCHEDULE_NOT_ACTIVE. */
