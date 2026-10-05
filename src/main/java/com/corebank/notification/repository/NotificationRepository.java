@@ -20,4 +20,6 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
     Page<Notification> findByCustomerIdOrderByCreatedAtDesc(UUID customerId, Pageable pageable);
 
     long countByTransactionReference(String transactionReference);
+
+    boolean existsByScheduledTransferIdAndDueOn(UUID scheduledTransferId, java.time.LocalDate dueOn);
 }

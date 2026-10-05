@@ -15,10 +15,14 @@ import com.corebank.notification.domain.Notification;
 import com.corebank.notification.domain.NotificationKind;
 import com.corebank.notification.dto.NotificationResponse;
 import com.corebank.notification.repository.NotificationRepository;
+import com.corebank.notification.service.MissedScheduledTransfer;
 import com.corebank.notification.service.NotificationService;
 import com.corebank.outbox.OutboxBackfillService;
 import com.corebank.outbox.domain.OutboxEvent;
 import com.corebank.outbox.repository.OutboxEventRepository;
+import com.corebank.schedule.domain.ScheduleFrequency;
+import com.corebank.schedule.dto.CreateScheduledTransferRequest;
+import com.corebank.schedule.service.ScheduledTransferService;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.dto.ReversalRequest;
@@ -45,6 +49,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * What customers are told, driven by the events the system really publishes.
@@ -83,6 +89,12 @@ class NotificationServiceTest {
 
     @Autowired
     private OutboxEventRepository outbox;
+
+    @Autowired
+    private ScheduledTransferService scheduledTransfers;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @Autowired
     private ApplicationEvents events;
@@ -260,6 +272,29 @@ class NotificationServiceTest {
 
         assertThatThrownBy(() -> notifications.saveAndFlush(orphan))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("a missed payment announced twice is a quiet no-op, not a constraint violation")
+    void aRepeatedMissedPaymentIsANoOp() {
+        // The schedule side's guard already stops this. If anything ever got past it, throwing here
+        // would roll back the failure being recorded and leave the occurrence due -- failing again on
+        // every tick, at the front of every batch, ahead of every other standing order.
+        UUID payee = account(asha, "INR");
+        UUID scheduleId = scheduledTransfers.create(new CreateScheduledTransferRequest(ashaAccount, payee,
+                new BigDecimal("750.00"), "INR", "Rent", ScheduleFrequency.DAILY, LocalDate.now(java.time.ZoneOffset.UTC), null)).id();
+        MissedScheduledTransfer missed = new MissedScheduledTransfer(scheduleId, ashaAccount, LocalDate.now(java.time.ZoneOffset.UTC),
+                new BigDecimal("750.00"), "INR", "INSUFFICIENT_FUNDS", MissedScheduledTransfer.Outcome.RETRYING,
+                LocalDate.now(java.time.ZoneOffset.UTC).plusDays(1), 1);
+        TransactionTemplate inTransaction = new TransactionTemplate(transactionManager);
+
+        inTransaction.executeWithoutResult(status -> notificationService.scheduledTransferMissed(missed));
+        assertThatCode(() -> inTransaction.executeWithoutResult(
+                status -> notificationService.scheduledTransferMissed(missed)))
+                .doesNotThrowAnyException();
+
+        assertThat(notificationsFor(asha)).filteredOn(n -> n.kind() == NotificationKind.SCHEDULED_TRANSFER_FAILED)
+                .hasSize(1);
     }
 
     /** Reads an outbox row back the way the consumer would receive it from Kafka. */

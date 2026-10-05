@@ -50,7 +50,16 @@ public class ScheduledTransferRunner {
     public void run() {
         LocalDate today = LocalDate.now(clock);
         for (UUID id : service.findDue(today)) {
-            runOne(id, today);
+            try {
+                runOne(id, today);
+            } catch (RuntimeException ex) {
+                // Something other than the transfer itself went wrong -- claiming the row, or
+                // recording the outcome. The mandate is left as it was and is tried again next
+                // tick; what must not happen is one mandate's problem stopping every mandate
+                // behind it in the batch, every tick, which is what letting this escape did.
+                count("error");
+                log.error("Scheduled transfer {} could not be processed; leaving it for the next tick", id, ex);
+            }
         }
     }
 

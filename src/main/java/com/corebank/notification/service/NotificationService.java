@@ -137,12 +137,21 @@ public class NotificationService {
      * -- its guard refuses to record the same occurrence twice -- and uk_notification_schedule_once
      * stands behind that.
      *
+     * <p>Checked here as well, so that if anything ever does get here twice, it is a quiet no-op
+     * rather than the constraint throwing. The throw would roll back the failure being recorded,
+     * leave the occurrence due, and fail again on every tick -- and since the runner works oldest
+     * first, it would sit at the front of every batch.
+     *
      * <p>Only the payer is told. The payee's money did not arrive either, but why is the payer's
      * business, and "there was not enough money" about someone else's account is not the payee's to
      * read.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void scheduledTransferMissed(MissedScheduledTransfer missed) {
+        if (notifications.existsByScheduledTransferIdAndDueOn(missed.scheduledTransferId(), missed.dueOn())) {
+            meterRegistry.counter("corebank.notifications", "outcome", "duplicate").increment();
+            return;
+        }
         Account source = accounts.findById(missed.sourceAccountId()).orElseThrow();
 
         Notification notification = new Notification();
