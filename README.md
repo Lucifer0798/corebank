@@ -565,6 +565,39 @@ enough that an instruction nobody can honour ends up in front of a human instead
 forever. A mandate that runs out of occurrences after a failure is `SUSPENDED`, not `COMPLETED` —
 `COMPLETED` means the money moved.
 
+**The payer is told about every refusal** — see Notifications. Only the payer: why a payment did
+not arrive is the payer's business, not the payee's.
+
+**Staff can resume a suspended mandate** (`POST /scheduled-transfers/{id}/resume`) once the cause
+is fixed. It picks up from its next occurrence on the original timetable. Recreating it instead
+would restart the timetable from whatever day that happened to be, so rent anchored to the 31st
+would move to the 5th. Three rules, each with a test that fails without it:
+
+- Occurrences missed while it was stopped are **not paid retroactively**. The customer was told
+  about each one at the time, and taking several payments the moment they top up the account
+  would take money they meant for one. This is the same reason a mandate cannot start in the past.
+- The occurrence that failed is **never retried**, even when the mandate is resumed on the same
+  day. The final failure does not advance the timetable, so without this rule the first date on or
+  after today could be the one just refused.
+- Both accounts are **re-checked** as for a new mandate. Whatever stopped it may have been an
+  account being frozen or closed.
+
+A one-off, or a mandate past its end date, has nothing left to run, so resuming it is refused.
+
+**One broken mandate cannot stall the rest.** The runner works oldest first. Anything that threw
+out of the loop for one mandate (claiming its row, or recording the outcome) used to abort the
+whole tick, and the mandate stayed due. So it sat at the front of every later batch, and no
+standing order behind it ever ran. Each mandate is now isolated: such a failure is logged and
+counted (`corebank.scheduled.transfers{outcome="error"}`), and the batch carries on.
+
+**Why a payment failed is shown in words safe for either side.** The refusal's own message is
+written for debugging. Insufficient funds reads "Account 100100000001 has 212.40 available but
+750.00 was requested". The mandate is listed on the payee's account too, and `lastError` used to
+carry that message verbatim, so a payee could read the payer's full account number and available
+balance. The stable error code is now stored beside the message (V15), and every response shows a
+reason derived from it: "There was not enough money in the account (750.00 INR was due)." The
+original message stays in the database and the log, where it belongs.
+
 ### Idempotency
 
 `Idempotency-Key` is required on deposits, withdrawals and transfers.
@@ -716,6 +749,22 @@ The consumer took over the `corebank-app` consumer group from the demo listener 
 only logged what it read. A fresh group starts from the earliest offset (`auto-offset-reset:
 earliest`), and would have replayed the topic's whole retention as a burst of alerts about old
 postings. Keeping the group means it resumes where the logger stopped.
+
+**Missed standing-order payments are notifications too.** A refused scheduled transfer posts
+nothing, so a feature built only on postings never heard of it. The payer was not told their rent
+had not gone out, nor that the instruction had stopped after three refusals. The schedule side now
+writes the notification itself, in the same transaction that records the failure. There is no
+Kafka hop: the failure is a local fact with no event to consume, and writing both together means
+the notification exists exactly when the recorded failure does. It sits inside the runner's guard
+that lets an occurrence be recorded only once, so a second replica or a crash re-run announces
+nothing twice. `uk_notification_schedule_once` backs that up. The message gives the amount, the
+masked account, the due date, the reason, and what happens next: the next date, or that it has
+stopped and how to restart it.
+
+A notification now has a `kind`. A posting's reference, status and direction are present only on
+a `TRANSACTION`, and the schedule and due date only on the other two. `ck_notification_shape`
+enforces that, since relaxing V14's `NOT NULL`s would otherwise have allowed a transaction
+notification with no transaction.
 
 **Interest and FX revaluation now reach Kafka.** Building this showed they never had. Both saved
 their posting straight to the repository instead of through `TransactionService`, so neither
@@ -893,6 +942,7 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/scheduled-transfers/{id}` | TELLER, ADMIN | One instruction, and how it has fared |
 | `GET` | `/api/v1/accounts/{id}/scheduled-transfers` | owner, staff | Instructions against one account, both directions |
 | `POST` | `/api/v1/scheduled-transfers/{id}/cancel` | TELLER, ADMIN | Stop one |
+| `POST` | `/api/v1/scheduled-transfers/{id}/resume` | TELLER, ADMIN | Restart a suspended one from its next occurrence |
 | `POST` | `/api/v1/transactions/{reference}/reversal` | ADMIN | Reverse a posting — needs `Idempotency-Key` and a `reason` |
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
