@@ -2,6 +2,7 @@ package com.corebank.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.corebank.account.domain.AccountType;
 import com.corebank.account.dto.OpenAccountRequest;
@@ -10,6 +11,8 @@ import com.corebank.account.service.InterestService;
 import com.corebank.customer.domain.KycStatus;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.service.CustomerService;
+import com.corebank.notification.domain.Notification;
+import com.corebank.notification.domain.NotificationKind;
 import com.corebank.notification.dto.NotificationResponse;
 import com.corebank.notification.repository.NotificationRepository;
 import com.corebank.notification.service.NotificationService;
@@ -37,6 +40,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.test.context.event.ApplicationEvents;
@@ -237,6 +241,25 @@ class NotificationServiceTest {
 
         // And a replay leaves nothing behind that would stop the live message being announced.
         assertThat(notificationService.handle(live)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a transaction notification still cannot exist without its transaction")
+    void theSchemaRefusesAHalfFormedNotification() {
+        // V15 relaxed the NOT NULLs on the posting columns so a missed standing order -- which has no
+        // posting -- could be recorded. ck_notification_shape is what now stops a TRANSACTION row
+        // being written without one, a guarantee the NOT NULLs used to give for free.
+        Notification orphan = new Notification();
+        orphan.setKind(NotificationKind.TRANSACTION);
+        orphan.setCustomerId(asha);
+        orphan.setAccountId(ashaAccount);
+        orphan.setAmount(new BigDecimal("1.00"));
+        orphan.setCurrency("INR");
+        orphan.setMessage("orphan");
+        orphan.setCreatedAt(Instant.now());
+
+        assertThatThrownBy(() -> notifications.saveAndFlush(orphan))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     /** Reads an outbox row back the way the consumer would receive it from Kafka. */

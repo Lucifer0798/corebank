@@ -70,7 +70,7 @@ public class ScheduledTransferRunner {
             // Insufficient funds is the expected case and is not an application fault, so this
             // logs at WARN with the reason rather than dumping a stack trace every time an
             // account happens to be short on the first of the month.
-            service.markFailure(id, occurrence.dueOn(), ex.getMessage());
+            service.markFailure(id, occurrence.dueOn(), ex);
             count("failed");
             log.warn("Scheduled transfer {} could not post its {} occurrence: {}",
                     id, occurrence.dueOn(), ex.toString());

@@ -7,8 +7,14 @@ public enum ScheduleStatus {
 
     /**
      * Stopped by the bank rather than by the customer, after the transfer failed on enough
-     * consecutive occasions to mean somebody should look at it. Terminal here: reinstating it is
-     * a new mandate, so that the reinstatement carries its own start date and audit trail.
+     * consecutive occasions to mean somebody should look at it -- or because its last occurrence
+     * failed. Staff can resume it once the cause is fixed, from its next occurrence; see
+     * {@code ScheduledTransfer#resume}.
+     *
+     * <p>This used to be final, with reinstatement meaning a new mandate "so that it carries its
+     * own start date". That cost more than it bought: the replacement lost the original's history,
+     * and its timetable started over -- a rent payment set up for the 31st, recreated on the 5th,
+     * moved to the 5th. Resuming keeps the anchor date, so the 31st stays the 31st.
      */
     SUSPENDED,
 

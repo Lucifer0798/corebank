@@ -4,9 +4,12 @@ import com.corebank.account.domain.Account;
 import com.corebank.account.service.AccountService;
 import com.corebank.common.Money;
 import com.corebank.common.exception.BusinessRuleException;
+import com.corebank.common.exception.FailureReason;
 import com.corebank.common.exception.ResourceNotFoundException;
 import com.corebank.config.CoreBankProperties;
 import com.corebank.idempotency.IdempotencyService;
+import com.corebank.notification.service.MissedScheduledTransfer;
+import com.corebank.notification.service.NotificationService;
 import com.corebank.schedule.domain.ScheduleStatus;
 import com.corebank.schedule.domain.ScheduledTransfer;
 import com.corebank.schedule.dto.CreateScheduledTransferRequest;
@@ -61,6 +64,7 @@ public class ScheduledTransferService {
     private final AccountService accountService;
     private final TransactionService transactionService;
     private final IdempotencyService idempotencyService;
+    private final NotificationService notificationService;
     private final CoreBankProperties.ScheduledTransfers properties;
     private final Clock clock;
 
@@ -68,12 +72,14 @@ public class ScheduledTransferService {
                                     AccountService accountService,
                                     TransactionService transactionService,
                                     IdempotencyService idempotencyService,
+                                    NotificationService notificationService,
                                     CoreBankProperties properties,
                                     Clock clock) {
         this.schedules = schedules;
         this.accountService = accountService;
         this.transactionService = transactionService;
         this.idempotencyService = idempotencyService;
+        this.notificationService = notificationService;
         this.properties = properties.scheduledTransfers();
         this.clock = clock;
     }
@@ -125,6 +131,21 @@ public class ScheduledTransferService {
     public Page<ScheduledTransferResponse> listForAccount(UUID accountId, Pageable pageable) {
         accountService.require(accountId);
         return schedules.findForAccount(accountId, pageable).map(ScheduledTransferResponse::from);
+    }
+
+    /**
+     * Restarts a suspended instruction from its next occurrence -- see {@link ScheduledTransfer#resume}.
+     * Both accounts are re-checked as they would be for a new instruction: whatever stopped it may
+     * have been one of them closing, and resuming into a closed account would only fail again.
+     */
+    @Transactional
+    public ScheduledTransferResponse resume(UUID id) {
+        ScheduledTransfer schedule = require(id);
+        requirePostableCustomerAccount(schedule.getSourceAccountId(), schedule.getCurrency());
+        requirePostableCustomerAccount(schedule.getDestinationAccountId(), schedule.getCurrency());
+        schedule.resume(LocalDate.now(clock));
+        log.info("Scheduled transfer {} resumed; next due {}", id, schedule.getNextRunOn());
+        return ScheduledTransferResponse.from(schedule);
     }
 
     @Transactional
@@ -179,10 +200,36 @@ public class ScheduledTransferService {
         advanceIfStillDue(id, dueOn, schedule -> schedule.recordSuccess(dueOn));
     }
 
+    /**
+     * Records the refusal and tells the payer, in one transaction. Inside the guard, so an
+     * occurrence that was already recorded -- by another replica, or before a crash -- is neither
+     * recorded nor announced a second time.
+     */
     @Transactional
-    public void markFailure(UUID id, LocalDate dueOn, String error) {
-        advanceIfStillDue(id, dueOn,
-                schedule -> schedule.recordFailure(dueOn, error, properties.maxConsecutiveFailures()));
+    public void markFailure(UUID id, LocalDate dueOn, RuntimeException failure) {
+        int max = properties.maxConsecutiveFailures();
+        advanceIfStillDue(id, dueOn, schedule -> {
+            schedule.recordFailure(dueOn, failure.getMessage(), FailureReason.codeOf(failure), max);
+            notificationService.scheduledTransferMissed(new MissedScheduledTransfer(
+                    schedule.getId(),
+                    schedule.getSourceAccountId(),
+                    dueOn,
+                    schedule.getAmount(),
+                    schedule.getCurrency(),
+                    schedule.getLastErrorCode(),
+                    outcomeOf(schedule, max),
+                    schedule.getNextRunOn(),
+                    schedule.getConsecutiveFailures()));
+        });
+    }
+
+    private static MissedScheduledTransfer.Outcome outcomeOf(ScheduledTransfer schedule, int maxConsecutiveFailures) {
+        if (schedule.getStatus() == ScheduleStatus.ACTIVE) {
+            return MissedScheduledTransfer.Outcome.RETRYING;
+        }
+        return schedule.getConsecutiveFailures() >= maxConsecutiveFailures
+                ? MissedScheduledTransfer.Outcome.STOPPED
+                : MissedScheduledTransfer.Outcome.ENDED;
     }
 
     /**

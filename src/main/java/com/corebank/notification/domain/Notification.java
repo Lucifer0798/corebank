@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -41,16 +42,28 @@ public class Notification {
     @Column(name = "account_id", nullable = false, updatable = false)
     private UUID accountId;
 
-    @Column(name = "transaction_reference", nullable = false, updatable = false, length = 36)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kind", nullable = false, updatable = false, length = 40)
+    private NotificationKind kind;
+
+    /** The next three describe a posting, and are set only on a TRANSACTION notification. */
+    @Column(name = "transaction_reference", updatable = false, length = 36)
     private String transactionReference;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "transaction_status", nullable = false, updatable = false, length = 20)
+    @Column(name = "transaction_status", updatable = false, length = 20)
     private TransactionStatus transactionStatus;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "direction", nullable = false, updatable = false, length = 10)
+    @Column(name = "direction", updatable = false, length = 10)
     private EntryDirection direction;
+
+    /** The next two identify a missed standing-instruction occurrence, and are set only on those. */
+    @Column(name = "scheduled_transfer_id", updatable = false)
+    private UUID scheduledTransferId;
+
+    @Column(name = "due_on", updatable = false)
+    private LocalDate dueOn;
 
     @Column(name = "amount", nullable = false, updatable = false, precision = 19, scale = 4)
     private BigDecimal amount;

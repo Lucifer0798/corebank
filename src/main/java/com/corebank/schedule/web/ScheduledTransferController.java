@@ -81,6 +81,21 @@ public class ScheduledTransferController {
         return PagedResponse.of(service.listForAccount(accountId, PageRequest.of(page, size)));
     }
 
+    @PostMapping("/scheduled-transfers/{id}/resume")
+    @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
+    @Operation(summary = "Restart a suspended standing instruction",
+            description = "Picks up from the next occurrence on or after today, on the original timetable. "
+                    + "Occurrences missed while it was stopped are not paid retroactively, and the one that "
+                    + "failed is never retried. Both accounts are checked again as for a new instruction.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Resumed; nextRunOn says when it next runs"),
+            @ApiResponse(responseCode = "422", description = "It is not suspended, nothing is left to run "
+                    + "(a one-off, or past its end date), or an account can no longer take part")
+    })
+    public ScheduledTransferResponse resume(@PathVariable UUID id) {
+        return service.resume(id);
+    }
+
     @PostMapping("/scheduled-transfers/{id}/cancel")
     @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
     @Operation(summary = "Stop a standing instruction",

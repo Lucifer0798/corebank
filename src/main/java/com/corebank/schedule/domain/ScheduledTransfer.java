@@ -89,8 +89,13 @@ public class ScheduledTransfer extends AuditableEntity {
     @Column(name = "last_run_on")
     private LocalDate lastRunOn;
 
+    /** The refusal's message, for whoever is debugging. Names account numbers and balances. */
     @Column(name = "last_error", length = 500)
     private String lastError;
+
+    /** The refusal's stable code -- what anything shown to a customer is derived from. */
+    @Column(name = "last_error_code", length = 50)
+    private String lastErrorCode;
 
     /**
      * The key every attempt at one occurrence shares, so a retry -- after a crash mid-run, or a
@@ -121,6 +126,7 @@ public class ScheduledTransfer extends AuditableEntity {
         this.runsCompleted++;
         this.consecutiveFailures = 0;
         this.lastError = null;
+        this.lastErrorCode = null;
         this.lastRunOn = ranOn;
         advance(ScheduleStatus.COMPLETED);
     }
@@ -134,9 +140,10 @@ public class ScheduledTransfer extends AuditableEntity {
      * <p>Running out of occurrences after a failure suspends rather than completes -- a mandate
      * whose last act was to fail has not finished its job.
      */
-    public void recordFailure(LocalDate attemptedOn, String error, int maxConsecutiveFailures) {
+    public void recordFailure(LocalDate attemptedOn, String error, String errorCode, int maxConsecutiveFailures) {
         this.consecutiveFailures++;
         this.lastError = error == null ? null : error.substring(0, Math.min(error.length(), 500));
+        this.lastErrorCode = errorCode;
         this.lastRunOn = attemptedOn;
 
         if (consecutiveFailures >= maxConsecutiveFailures) {
@@ -145,6 +152,44 @@ public class ScheduledTransfer extends AuditableEntity {
             return;
         }
         advance(ScheduleStatus.SUSPENDED);
+    }
+
+    /**
+     * Restarts a suspended instruction from its next occurrence on or after {@code today}.
+     *
+     * <p>Occurrences that fell due while it was stopped are not paid now. They were missed, and the
+     * customer was told so at the time; posting the backlog the moment someone has topped up the
+     * account would take several payments at once from money they meant for one -- the same reason
+     * a schedule may not start in the past.
+     *
+     * <p>Never the occurrence that failed, either, even when that was today. The occurrence index is
+     * not advanced when the final failure suspends, so without this the first candidate on or after
+     * today could be the very date just refused, and resuming would retry it on the next tick.
+     *
+     * <p>Refused when nothing is left to run -- a one-off, or a schedule whose end date has passed.
+     * A new instruction is the honest answer there, not a resumed one with no future.
+     */
+    public void resume(LocalDate today) {
+        if (status != ScheduleStatus.SUSPENDED) {
+            throw new BusinessRuleException("SCHEDULE_NOT_SUSPENDED",
+                    "Only a suspended schedule can be resumed; this one is " + status.name().toLowerCase());
+        }
+        int index = occurrenceIndex;
+        LocalDate candidate = frequency.occurrence(startsOn, index);
+        while (candidate != null
+                && (candidate.isBefore(today) || (lastRunOn != null && !candidate.isAfter(lastRunOn)))) {
+            index++;
+            candidate = frequency.occurrence(startsOn, index);
+        }
+        candidate = withinWindow(candidate);
+        if (candidate == null) {
+            throw new BusinessRuleException("SCHEDULE_HAS_NO_RUNS_LEFT",
+                    "This schedule has no occurrence left to run; set up a new one instead");
+        }
+        this.occurrenceIndex = index;
+        this.nextRunOn = candidate;
+        this.consecutiveFailures = 0;
+        this.status = ScheduleStatus.ACTIVE;
     }
 
     public void cancel() {

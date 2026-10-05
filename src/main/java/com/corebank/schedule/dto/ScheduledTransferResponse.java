@@ -1,6 +1,7 @@
 package com.corebank.schedule.dto;
 
 import com.corebank.common.Money;
+import com.corebank.common.exception.FailureReason;
 import com.corebank.schedule.domain.ScheduleFrequency;
 import com.corebank.schedule.domain.ScheduleStatus;
 import com.corebank.schedule.domain.ScheduledTransfer;
@@ -32,7 +33,9 @@ public record ScheduledTransferResponse(
 
         LocalDate lastRunOn,
 
-        @Schema(description = "Why the most recent attempt was refused, if it was")
+        @Schema(description = "Why the most recent attempt was refused, if it was -- in words safe for "
+                + "either account's owner to read, since both can list this schedule. Never the "
+                + "underlying error, which names account numbers and the payer's balance.")
         String lastError) {
 
     public static ScheduledTransferResponse from(ScheduledTransfer schedule) {
@@ -51,6 +54,17 @@ public record ScheduledTransferResponse(
                 schedule.getRunsCompleted(),
                 schedule.getConsecutiveFailures(),
                 schedule.getLastRunOn(),
-                schedule.getLastError());
+                lastErrorOf(schedule));
+    }
+
+    /** Null when the last attempt did not fail; otherwise the customer-safe reason. */
+    private static String lastErrorOf(ScheduledTransfer schedule) {
+        if (schedule.getLastError() == null && schedule.getLastErrorCode() == null) {
+            return null;
+        }
+        String reason = FailureReason.describe(schedule.getLastErrorCode());
+        return Character.toUpperCase(reason.charAt(0)) + reason.substring(1)
+                + " (" + Money.normalize(schedule.getAmount()).toPlainString() + " " + schedule.getCurrency()
+                + " was due).";
     }
 }

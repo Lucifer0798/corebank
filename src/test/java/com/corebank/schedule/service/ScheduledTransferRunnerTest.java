@@ -1,13 +1,20 @@
 package com.corebank.schedule.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.corebank.account.domain.AccountStatus;
 import com.corebank.account.domain.AccountType;
 import com.corebank.account.dto.OpenAccountRequest;
 import com.corebank.account.service.AccountService;
 import com.corebank.customer.domain.KycStatus;
 import com.corebank.customer.dto.CreateCustomerRequest;
+import com.corebank.common.exception.BusinessRuleException;
+import com.corebank.common.exception.InsufficientFundsException;
 import com.corebank.customer.service.CustomerService;
+import com.corebank.notification.domain.NotificationKind;
+import com.corebank.notification.dto.NotificationResponse;
+import com.corebank.notification.service.NotificationService;
 import com.corebank.schedule.ScheduledTransferRunner;
 import com.corebank.schedule.domain.ScheduleFrequency;
 import com.corebank.schedule.domain.ScheduleStatus;
@@ -20,6 +27,9 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +37,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
 
 /**
  * The runner against a real database, real postings and the real idempotency machinery -- the
@@ -58,6 +69,10 @@ class ScheduledTransferRunnerTest {
     @Autowired
     private TransactionService transactionService;
 
+    @Autowired
+    private NotificationService notificationService;
+
+    private UUID customerId;
     private UUID source;
     private UUID destination;
     private LocalDate today;
@@ -67,7 +82,7 @@ class ScheduledTransferRunnerTest {
         today = LocalDate.now(Clock.systemUTC());
 
         int n = UNIQUE.incrementAndGet();
-        UUID customerId = customerService.create(new CreateCustomerRequest(
+        customerId = customerService.create(new CreateCustomerRequest(
                 "Ravi", "Iyer", "ravi.iyer." + n + "@example.com", null,
                 LocalDate.of(1990, 1, 1))).id();
         customerService.updateKyc(customerId, KycStatus.VERIFIED);
@@ -237,6 +252,129 @@ class ScheduledTransferRunnerTest {
         ScheduledTransferResponse after = scheduledTransfers.get(created.id());
         assertThat(after.runsCompleted()).isEqualTo(1);
         assertThat(after.nextRunOn()).isEqualTo(today.plusDays(1));
+    }
+
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
+
+    private List<NotificationResponse> notifications() {
+        return notificationService.forCustomer(customerId, PageRequest.of(0, 50)).getContent();
+    }
+
+    private List<NotificationResponse> missedPayments() {
+        return notifications().stream().filter(n -> n.kind() != NotificationKind.TRANSACTION).toList();
+    }
+
+    private String masked(UUID accountId) {
+        String number = accountService.get(accountId).accountNumber();
+        return "XXXX" + number.substring(number.length() - 4);
+    }
+
+    /** Three refusals in a row, the third of which suspends. */
+    private ScheduledTransferResponse suspended() {
+        ScheduledTransferResponse created = schedule(ScheduleFrequency.DAILY, "5000.00", null);
+        runnerOn(today).run();
+        runnerOn(today.plusDays(1)).run();
+        runnerOn(today.plusDays(2)).run();
+        assertThat(scheduledTransfers.get(created.id()).status()).isEqualTo(ScheduleStatus.SUSPENDED);
+        return created;
+    }
+
+    @Test
+    @DisplayName("a refused occurrence tells the payer it did not go out, and when the next one is")
+    void aRefusalIsAnnounced() {
+        schedule(ScheduleFrequency.DAILY, "5000.00", null);
+
+        runnerOn(today).run();
+
+        assertThat(missedPayments()).singleElement().satisfies(missed -> {
+            assertThat(missed.kind()).isEqualTo(NotificationKind.SCHEDULED_TRANSFER_FAILED);
+            assertThat(missed.accountId()).isEqualTo(source);
+            assertThat(missed.dueOn()).isEqualTo(today);
+            assertThat(missed.message()).isEqualTo("Your scheduled transfer of 5000.00 INR from account "
+                    + masked(source) + ", due " + DAY.format(today) + ", was not made: there was not enough "
+                    + "money in the account. The next one is due " + DAY.format(today.plusDays(1)) + ".");
+        });
+    }
+
+    @Test
+    @DisplayName("the refusal that suspends an instruction says it has stopped")
+    void aSuspensionIsAnnounced() {
+        suspended();
+
+        List<NotificationResponse> missed = missedPayments();
+        assertThat(missed).extracting(NotificationResponse::kind).containsExactlyInAnyOrder(
+                NotificationKind.SCHEDULED_TRANSFER_FAILED,
+                NotificationKind.SCHEDULED_TRANSFER_FAILED,
+                NotificationKind.SCHEDULED_TRANSFER_SUSPENDED);
+        assertThat(missed).filteredOn(n -> n.kind() == NotificationKind.SCHEDULED_TRANSFER_SUSPENDED)
+                .singleElement()
+                .satisfies(n -> assertThat(n.message())
+                        .contains("After 3 failed attempts in a row it has been stopped"));
+    }
+
+    @Test
+    @DisplayName("a refusal recorded twice for one occurrence is announced once")
+    void aRefusalIsAnnouncedOnce() {
+        // Two replicas both failing the same occurrence, or a re-run after a crash between the
+        // refusal and the bookkeeping. The guard lets one of them record it; the notification is
+        // inside that guard, so the other says nothing either.
+        ScheduledTransferResponse created = schedule(ScheduleFrequency.DAILY, "5000.00", null);
+        runnerOn(today).run();
+
+        scheduledTransfers.markFailure(created.id(), today,
+                new InsufficientFundsException("100100000001", BigDecimal.ZERO, new BigDecimal("5000.00")));
+
+        assertThat(missedPayments()).hasSize(1);
+        assertThat(scheduledTransfers.get(created.id()).consecutiveFailures()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("why a payment failed is shown without the payer's account number or balance")
+    void theReasonGivesNothingAway() {
+        // The list this comes from is readable by the payee too -- it lists the mandate on both
+        // accounts. The exception's own message names the payer's full account number and how much
+        // they had, which is the payer's business alone.
+        ScheduledTransferResponse created = schedule(ScheduleFrequency.DAILY, "5000.00", null);
+        runnerOn(today).run();
+
+        String shown = scheduledTransfers.get(created.id()).lastError();
+        assertThat(shown)
+                .isEqualTo("There was not enough money in the account (5000.00 INR was due).")
+                .doesNotContain(accountService.get(source).accountNumber())
+                .doesNotContain("1000");
+    }
+
+    @Test
+    @DisplayName("a resumed instruction picks up after the failure and pays once there is money")
+    void aResumedInstructionPaysAgain() {
+        ScheduledTransferResponse created = suspended();
+
+        ScheduledTransferResponse resumed = scheduledTransfers.resume(created.id());
+
+        // The runner here believed it was two days ahead when the last occurrence failed. Resume runs
+        // on the real clock, but never hands back a date at or before the one that just failed.
+        assertThat(resumed.status()).isEqualTo(ScheduleStatus.ACTIVE);
+        assertThat(resumed.nextRunOn()).isEqualTo(today.plusDays(3));
+
+        transactionService.deposit(source, new AmountRequest(new BigDecimal("5000.00"), "INR", "Top-up"),
+                "topup-" + created.id());
+        runnerOn(today.plusDays(3)).run();
+
+        assertThat(balanceOf(destination)).isEqualByComparingTo("5000.00");
+        assertThat(scheduledTransfers.get(created.id()).runsCompleted()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("an instruction cannot be resumed into an account that can no longer take part")
+    void resumeRechecksTheAccounts() {
+        ScheduledTransferResponse created = suspended();
+        accountService.changeStatus(destination, AccountStatus.FROZEN);
+
+        assertThatThrownBy(() -> scheduledTransfers.resume(created.id()))
+                .isInstanceOf(BusinessRuleException.class)
+                .extracting(ex -> ((BusinessRuleException) ex).getCode())
+                .isEqualTo("ACCOUNT_FROZEN");
+        assertThat(scheduledTransfers.get(created.id()).status()).isEqualTo(ScheduleStatus.SUSPENDED);
     }
 
     @Test
