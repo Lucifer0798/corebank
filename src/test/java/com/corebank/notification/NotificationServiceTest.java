@@ -2,6 +2,7 @@ package com.corebank.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.corebank.account.domain.AccountType;
 import com.corebank.account.dto.OpenAccountRequest;
@@ -10,12 +11,18 @@ import com.corebank.account.service.InterestService;
 import com.corebank.customer.domain.KycStatus;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.service.CustomerService;
+import com.corebank.notification.domain.Notification;
+import com.corebank.notification.domain.NotificationKind;
 import com.corebank.notification.dto.NotificationResponse;
 import com.corebank.notification.repository.NotificationRepository;
+import com.corebank.notification.service.MissedScheduledTransfer;
 import com.corebank.notification.service.NotificationService;
 import com.corebank.outbox.OutboxBackfillService;
 import com.corebank.outbox.domain.OutboxEvent;
 import com.corebank.outbox.repository.OutboxEventRepository;
+import com.corebank.schedule.domain.ScheduleFrequency;
+import com.corebank.schedule.dto.CreateScheduledTransferRequest;
+import com.corebank.schedule.service.ScheduledTransferService;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.dto.AmountRequest;
 import com.corebank.transaction.dto.ReversalRequest;
@@ -37,10 +44,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * What customers are told, driven by the events the system really publishes.
@@ -79,6 +89,12 @@ class NotificationServiceTest {
 
     @Autowired
     private OutboxEventRepository outbox;
+
+    @Autowired
+    private ScheduledTransferService scheduledTransfers;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @Autowired
     private ApplicationEvents events;
@@ -237,6 +253,48 @@ class NotificationServiceTest {
 
         // And a replay leaves nothing behind that would stop the live message being announced.
         assertThat(notificationService.handle(live)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a transaction notification still cannot exist without its transaction")
+    void theSchemaRefusesAHalfFormedNotification() {
+        // V15 relaxed the NOT NULLs on the posting columns so a missed standing order -- which has no
+        // posting -- could be recorded. ck_notification_shape is what now stops a TRANSACTION row
+        // being written without one, a guarantee the NOT NULLs used to give for free.
+        Notification orphan = new Notification();
+        orphan.setKind(NotificationKind.TRANSACTION);
+        orphan.setCustomerId(asha);
+        orphan.setAccountId(ashaAccount);
+        orphan.setAmount(new BigDecimal("1.00"));
+        orphan.setCurrency("INR");
+        orphan.setMessage("orphan");
+        orphan.setCreatedAt(Instant.now());
+
+        assertThatThrownBy(() -> notifications.saveAndFlush(orphan))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("a missed payment announced twice is a quiet no-op, not a constraint violation")
+    void aRepeatedMissedPaymentIsANoOp() {
+        // The schedule side's guard already stops this. If anything ever got past it, throwing here
+        // would roll back the failure being recorded and leave the occurrence due -- failing again on
+        // every tick, at the front of every batch, ahead of every other standing order.
+        UUID payee = account(asha, "INR");
+        UUID scheduleId = scheduledTransfers.create(new CreateScheduledTransferRequest(ashaAccount, payee,
+                new BigDecimal("750.00"), "INR", "Rent", ScheduleFrequency.DAILY, LocalDate.now(java.time.ZoneOffset.UTC), null)).id();
+        MissedScheduledTransfer missed = new MissedScheduledTransfer(scheduleId, ashaAccount, LocalDate.now(java.time.ZoneOffset.UTC),
+                new BigDecimal("750.00"), "INR", "INSUFFICIENT_FUNDS", MissedScheduledTransfer.Outcome.RETRYING,
+                LocalDate.now(java.time.ZoneOffset.UTC).plusDays(1), 1);
+        TransactionTemplate inTransaction = new TransactionTemplate(transactionManager);
+
+        inTransaction.executeWithoutResult(status -> notificationService.scheduledTransferMissed(missed));
+        assertThatCode(() -> inTransaction.executeWithoutResult(
+                status -> notificationService.scheduledTransferMissed(missed)))
+                .doesNotThrowAnyException();
+
+        assertThat(notificationsFor(asha)).filteredOn(n -> n.kind() == NotificationKind.SCHEDULED_TRANSFER_FAILED)
+                .hasSize(1);
     }
 
     /** Reads an outbox row back the way the consumer would receive it from Kafka. */

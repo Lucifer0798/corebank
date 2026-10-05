@@ -6,6 +6,8 @@ import com.corebank.account.domain.EntryDirection;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.domain.TransactionType;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +53,59 @@ class NotificationRenderTest {
     void aReversedCreditIsStated() {
         assertThat(render(TransactionType.DEPOSIT, TransactionStatus.REVERSED, EntryDirection.CREDIT))
                 .isEqualTo("A credit of 500.00 INR to account XXXX0001 was reversed");
+    }
+
+    private static String missed(String code, MissedScheduledTransfer.Outcome outcome, LocalDate next, int failures) {
+        return NotificationService.renderMissed(new MissedScheduledTransfer(UUID.randomUUID(), UUID.randomUUID(),
+                LocalDate.of(2026, 11, 1), new BigDecimal("750.00"), "INR", code, outcome, next, failures),
+                "100100000001");
+    }
+
+    @Test
+    @DisplayName("a missed standing order says what, when, why, and what happens next")
+    void aMissedPaymentIsExplained() {
+        assertThat(missed("INSUFFICIENT_FUNDS", MissedScheduledTransfer.Outcome.RETRYING, LocalDate.of(2026, 12, 1), 1))
+                .isEqualTo("Your scheduled transfer of 750.00 INR from account XXXX0001, due 1 Nov 2026, was not "
+                        + "made: there was not enough money in the account. The next one is due 1 Dec 2026.");
+    }
+
+    @Test
+    @DisplayName("a stopped standing order says it has stopped, and how to restart it")
+    void aStoppedInstructionSaysSo() {
+        assertThat(missed("DAILY_LIMIT_EXCEEDED", MissedScheduledTransfer.Outcome.STOPPED, null, 3))
+                .endsWith("was not made: it would have gone over the account's daily limit. After 3 failed "
+                        + "attempts in a row it has been stopped; contact your branch to restart it.");
+    }
+
+    @Test
+    @DisplayName("a standing order whose last payment failed does not promise another")
+    void anEndedInstructionPromisesNothing() {
+        assertThat(missed("INSUFFICIENT_FUNDS", MissedScheduledTransfer.Outcome.ENDED, null, 1))
+                .endsWith("It was the last payment on this instruction.")
+                .doesNotContain("next one");
+    }
+
+    @Test
+    @DisplayName("an unrecognised failure gets a reason that gives nothing away")
+    void anUnknownFailureIsGeneric() {
+        // An account being frozen or closed could be the payee's, and an infrastructure error is
+        // nobody's business but ours. Neither gets explained to a customer.
+        assertThat(missed("ACCOUNT_FROZEN", MissedScheduledTransfer.Outcome.RETRYING, LocalDate.of(2026, 12, 1), 1))
+                .contains("was not made: it could not be processed.");
+        assertThat(missed(null, MissedScheduledTransfer.Outcome.RETRYING, LocalDate.of(2026, 12, 1), 1))
+                .contains("was not made: it could not be processed.");
+    }
+
+    @Test
+    @DisplayName("the longest missed-payment message still fits the column")
+    void theLongestMessageFits() {
+        // message is VARCHAR(255). The STOPPED wording with the largest amount the ledger holds and a
+        // two-digit failure count is the worst case; an insert that overflowed would roll back the
+        // failure being recorded along with it.
+        String longest = NotificationService.renderMissed(new MissedScheduledTransfer(UUID.randomUUID(),
+                UUID.randomUUID(), LocalDate.of(2026, 12, 31), new BigDecimal("999999999999999.99"), "INR",
+                "DAILY_LIMIT_EXCEEDED", MissedScheduledTransfer.Outcome.STOPPED, null, 99), "100100000001");
+        assertThat(longest.length()).isLessThanOrEqualTo(255);
     }
 
     @Test

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScheduledTransfer } from "./api/types";
-import { canCancel, directionFor, scheduleAttention } from "./schedule";
+import { canCancel, canResume, directionFor, scheduleAttention } from "./schedule";
 
 /**
  * A standing instruction fails quietly by design -- the runner skips the occurrence, logs it, and
@@ -46,29 +46,29 @@ describe("scheduleAttention", () => {
   it("warns about a live mandate that has started failing", () => {
     const attention = scheduleAttention(schedule({
       consecutiveFailures: 2,
-      lastError: "Account 100100000001 has 50.0000 available but 750.0000 was requested",
+      lastError: "There was not enough money in the account (750.00 INR was due).",
     }));
 
     expect(attention.level).toBe("warning");
     expect(attention.level !== "none" && attention.message).toContain("2 attempts failed");
-    // The reason, verbatim from the backend: "it failed" without "it was short 700" tells a
-    // teller nothing they can act on.
-    expect(attention.level !== "none" && attention.message).toContain("750.0000 was requested");
+    // The reason, verbatim from the backend. Customer-safe since it is shown to the payee as
+    // well: the cause and the amount due, never the payer's balance or account number.
+    expect(attention.level !== "none" && attention.message).toContain("750.00 INR was due");
   });
 
-  it("reports a suspended mandate as stopped, and says it cannot be restarted", () => {
+  it("reports a suspended mandate as stopped, and says it can be resumed", () => {
     const attention = scheduleAttention(schedule({
       status: "SUSPENDED",
       nextRunOn: null,
       consecutiveFailures: 3,
-      lastError: "Account 100100000001 has 0.0000 available but 750.0000 was requested",
+      lastError: "There was not enough money in the account (750.00 INR was due).",
     }));
 
     expect(attention.level).toBe("stopped");
     expect(attention.level !== "none" && attention.message).toContain("3 failed attempts");
-    // SUSPENDED is terminal on the backend; without saying so the obvious next move is to hunt
-    // for a resume button that does not exist.
-    expect(attention.level !== "none" && attention.message).toContain("replacement");
+    // Staff can resume it now, and saying so is what stops a teller recreating the instruction --
+    // which would move its timetable to whatever day they happened to do it.
+    expect(attention.level !== "none" && attention.message).toContain("resume");
   });
 
   it("gets the singular right", () => {
@@ -94,6 +94,17 @@ describe("canCancel", () => {
     expect(canCancel(schedule({ status: "SUSPENDED" }))).toBe(false);
     expect(canCancel(schedule({ status: "COMPLETED" }))).toBe(false);
     expect(canCancel(schedule({ status: "CANCELLED" }))).toBe(false);
+  });
+});
+
+describe("canResume", () => {
+  it("offers resuming only a suspended mandate", () => {
+    expect(canResume(schedule({ status: "SUSPENDED", nextRunOn: null }))).toBe(true);
+    expect(canResume(schedule())).toBe(false);
+    // A cancellation was somebody's decision; a completion means the money moved. Neither is the
+    // bank's to restart.
+    expect(canResume(schedule({ status: "CANCELLED", nextRunOn: null }))).toBe(false);
+    expect(canResume(schedule({ status: "COMPLETED", nextRunOn: null }))).toBe(false);
   });
 });
 

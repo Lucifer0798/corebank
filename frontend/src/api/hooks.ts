@@ -340,6 +340,20 @@ export function useCancelScheduledTransfer() {
 }
 
 /**
+ * Restarts a SUSPENDED instruction from its next date on the original timetable. Staff only; the
+ * backend refuses with 422 when nothing is left to run or an account can no longer take part.
+ */
+export function useResumeScheduledTransfer() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (scheduleId: string) =>
+      api.post<ScheduledTransfer>(`/scheduled-transfers/${scheduleId}/resume`),
+    onSuccess: (schedule) => invalidateSchedules(queryClient, schedule),
+  });
+}
+
+/**
  * A mandate is listed against both accounts it names, so both lists go stale together -- the page
  * showing only one of them would otherwise keep displaying a cancelled instruction as live.
  */

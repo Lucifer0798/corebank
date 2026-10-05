@@ -122,13 +122,21 @@ export interface StatementLine {
  * Mirrors com.corebank.notification.dto.NotificationResponse. One per customer account a posting
  * touched, written by the Kafka consumer -- so a fresh posting can take a moment to appear here.
  */
+export type NotificationKind =
+  | "TRANSACTION" | "SCHEDULED_TRANSFER_FAILED" | "SCHEDULED_TRANSFER_SUSPENDED";
+
 export interface Notification {
   id: string;
+  /** TRANSACTION carries the posting fields; the other two carry the schedule fields instead. */
+  kind: NotificationKind;
   accountId: string;
-  transactionReference: string;
+  transactionReference: string | null;
   /** REVERSED rows are a second notification about the same posting, not a replacement. */
-  transactionStatus: "POSTED" | "REVERSED";
-  direction: EntryDirection;
+  transactionStatus: "POSTED" | "REVERSED" | null;
+  direction: EntryDirection | null;
+  scheduledTransferId: string | null;
+  /** The date a missed standing-instruction payment was due -- a calendar date, no time. */
+  dueOn: string | null;
   amount: number;
   currency: string;
   message: string;

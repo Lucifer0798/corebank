@@ -5,6 +5,7 @@ import {
   useAccount,
   useBalance,
   useCancelScheduledTransfer,
+  useResumeScheduledTransfer,
   useCloseAccount,
   useCreateScheduledTransfer,
   useDeposit,
@@ -21,7 +22,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { StatusPill } from "../components/StatusPill";
 import { formatAmount, formatCalendarDate, formatDateTime } from "../format";
 import { isStaff, rolesFromAccessToken } from "../auth/roles";
-import { canCancel, directionFor, scheduleAttention } from "../schedule";
+import { canCancel, canResume, directionFor, scheduleAttention } from "../schedule";
 
 export function AccountDetailPage() {
   const { accountId } = useParams<{ accountId: string }>();
@@ -280,11 +281,12 @@ export function ScheduledTransfersCard({ account, staff }: { account: Account; s
   const [page, setPage] = useState(0);
   const { data: schedules, error } = useScheduledTransfers(account.id, page);
   const cancel = useCancelScheduledTransfer();
+  const resume = useResumeScheduledTransfer();
 
   return (
     <div className="card">
       <h3>Standing instructions</h3>
-      <ErrorBanner error={error || cancel.error} />
+      <ErrorBanner error={error || cancel.error || resume.error} />
 
       <table>
         <thead>
@@ -324,6 +326,15 @@ export function ScheduledTransfersCard({ account, staff }: { account: Account; s
                           onClick={() => cancel.mutate(schedule.id)}
                         >
                           Cancel
+                        </button>
+                      )}
+                      {canResume(schedule) && (
+                        <button
+                          className="btn btn--secondary"
+                          disabled={resume.isPending}
+                          onClick={() => resume.mutate(schedule.id)}
+                        >
+                          Resume
                         </button>
                       )}
                     </td>

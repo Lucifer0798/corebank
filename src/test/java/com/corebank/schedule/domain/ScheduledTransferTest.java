@@ -112,7 +112,7 @@ class ScheduledTransferTest {
     void failureSkipsTheOccurrence() {
         ScheduledTransfer schedule = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
 
-        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
 
         assertThat(schedule.getStatus()).isEqualTo(ScheduleStatus.ACTIVE);
         assertThat(schedule.getNextRunOn())
@@ -128,11 +128,11 @@ class ScheduledTransferTest {
     void repeatedFailuresSuspend() {
         ScheduledTransfer schedule = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
 
-        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", 3);
-        schedule.recordFailure(LocalDate.of(2026, 5, 2), "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 2), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
         assertThat(schedule.getStatus()).isEqualTo(ScheduleStatus.ACTIVE);
 
-        schedule.recordFailure(LocalDate.of(2026, 5, 3), "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 3), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
 
         assertThat(schedule.getStatus()).isEqualTo(ScheduleStatus.SUSPENDED);
         assertThat(schedule.getNextRunOn())
@@ -147,10 +147,10 @@ class ScheduledTransferTest {
         // for a year but succeeds in between is not one to suspend.
         ScheduledTransfer schedule = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
 
-        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", 3);
-        schedule.recordFailure(LocalDate.of(2026, 5, 2), "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 2), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
         schedule.recordSuccess(LocalDate.of(2026, 5, 3));
-        schedule.recordFailure(LocalDate.of(2026, 5, 4), "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 4), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
 
         assertThat(schedule.getConsecutiveFailures()).isEqualTo(1);
         assertThat(schedule.getStatus()).isEqualTo(ScheduleStatus.ACTIVE);
@@ -163,10 +163,97 @@ class ScheduledTransferTest {
         // The distinction matters to whoever reads the list: COMPLETED means the money moved.
         ScheduledTransfer schedule = mandate(ScheduleFrequency.ONCE, LocalDate.of(2026, 5, 1), null);
 
-        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", 3);
+        schedule.recordFailure(LocalDate.of(2026, 5, 1), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
 
         assertThat(schedule.getStatus()).isEqualTo(ScheduleStatus.SUSPENDED);
         assertThat(schedule.getRunsCompleted()).isZero();
+    }
+
+    /** Fails {@code times} consecutive occurrences, starting with the one currently due. */
+    private static void failRepeatedly(ScheduledTransfer schedule, int times) {
+        for (int i = 0; i < times; i++) {
+            schedule.recordFailure(schedule.getNextRunOn(), "INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", 3);
+        }
+    }
+
+    private static String codeOf(Throwable ex) {
+        return ((BusinessRuleException) ex).getCode();
+    }
+
+    @Test
+    @DisplayName("resuming keeps the original timetable -- a payment on the 31st stays on the 31st")
+    void resumeKeepsTheAnchorDate() {
+        // The reason resume exists rather than "set up a new one": a replacement created on the 5th
+        // would pay on the 5th from then on.
+        ScheduledTransfer schedule = mandate(ScheduleFrequency.MONTHLY, LocalDate.of(2026, 1, 31), null);
+        failRepeatedly(schedule, 3); // 31 Jan, 28 Feb, 31 Mar
+        assertThat(schedule.getStatus()).isEqualTo(ScheduleStatus.SUSPENDED);
+
+        schedule.resume(LocalDate.of(2026, 5, 5));
+
+        assertThat(schedule.getStatus()).isEqualTo(ScheduleStatus.ACTIVE);
+        assertThat(schedule.getNextRunOn())
+                .describedAs("the next 31st-anchored date after today; April's was missed while stopped and is not paid")
+                .isEqualTo(LocalDate.of(2026, 5, 31));
+        assertThat(schedule.getConsecutiveFailures()).isZero();
+    }
+
+    @Test
+    @DisplayName("resuming on the day it was suspended does not retry the occurrence that just failed")
+    void resumeNeverRetriesTheFailedOccurrence() {
+        // The final failure does not advance the index, so the first candidate on or after today is
+        // the date that was just refused. Picking it would re-run that payment on the next tick.
+        ScheduledTransfer schedule = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
+        failRepeatedly(schedule, 3); // 1, 2, 3 May
+
+        schedule.resume(LocalDate.of(2026, 5, 3));
+
+        assertThat(schedule.getNextRunOn()).isEqualTo(LocalDate.of(2026, 5, 4));
+    }
+
+    @Test
+    @DisplayName("a resumed instruction gets a full allowance of failures again")
+    void resumeResetsTheFailureRun() {
+        ScheduledTransfer schedule = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
+        failRepeatedly(schedule, 3);
+        schedule.resume(LocalDate.of(2026, 5, 10));
+
+        failRepeatedly(schedule, 1);
+
+        assertThat(schedule.getStatus())
+                .describedAs("one failure after a resume is one, not a fourth in a row")
+                .isEqualTo(ScheduleStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("a one-off, or a schedule past its end date, has nothing to resume")
+    void resumeIsRefusedWhenNothingIsLeft() {
+        ScheduledTransfer oneOff = mandate(ScheduleFrequency.ONCE, LocalDate.of(2026, 5, 1), null);
+        failRepeatedly(oneOff, 1);
+        assertThatThrownBy(() -> oneOff.resume(LocalDate.of(2026, 5, 2)))
+                .extracting(ScheduledTransferTest::codeOf).isEqualTo("SCHEDULE_HAS_NO_RUNS_LEFT");
+
+        ScheduledTransfer ended = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 10));
+        failRepeatedly(ended, 3);
+        assertThatThrownBy(() -> ended.resume(LocalDate.of(2026, 5, 11)))
+                .extracting(ScheduledTransferTest::codeOf).isEqualTo("SCHEDULE_HAS_NO_RUNS_LEFT");
+        assertThat(ended.getStatus())
+                .describedAs("a refused resume leaves the instruction exactly as it was")
+                .isEqualTo(ScheduleStatus.SUSPENDED);
+    }
+
+    @Test
+    @DisplayName("only a suspended instruction can be resumed")
+    void resumeIsOnlyForSuspended() {
+        ScheduledTransfer active = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
+        assertThatThrownBy(() -> active.resume(LocalDate.of(2026, 5, 1)))
+                .extracting(ScheduledTransferTest::codeOf).isEqualTo("SCHEDULE_NOT_SUSPENDED");
+
+        ScheduledTransfer cancelled = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
+        cancelled.cancel();
+        assertThatThrownBy(() -> cancelled.resume(LocalDate.of(2026, 5, 1)))
+                .describedAs("a customer's cancellation is not the bank's to undo")
+                .extracting(ScheduledTransferTest::codeOf).isEqualTo("SCHEDULE_NOT_SUSPENDED");
     }
 
     @Test

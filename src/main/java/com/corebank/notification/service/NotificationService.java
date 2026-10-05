@@ -4,7 +4,9 @@ import com.corebank.account.domain.Account;
 import com.corebank.account.domain.EntryDirection;
 import com.corebank.account.repository.AccountRepository;
 import com.corebank.common.Money;
+import com.corebank.common.exception.FailureReason;
 import com.corebank.notification.domain.Notification;
+import com.corebank.notification.domain.NotificationKind;
 import com.corebank.notification.dto.NotificationResponse;
 import com.corebank.notification.repository.NotificationRepository;
 import com.corebank.transaction.domain.TransactionStatus;
@@ -14,6 +16,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -21,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -101,6 +106,7 @@ public class NotificationService {
             }
 
             Notification notification = new Notification();
+            notification.setKind(NotificationKind.TRANSACTION);
             notification.setCustomerId(account.getCustomer().getId());
             notification.setAccountId(account.getId());
             notification.setTransactionReference(event.reference());
@@ -120,6 +126,49 @@ public class NotificationService {
             log.debug("Wrote {} notification(s) for {} ({})", written, event.reference(), status);
         }
         return written;
+    }
+
+    /**
+     * Tells the payer a standing instruction did not pay.
+     *
+     * <p>Called in the same transaction that records the failure, not through Kafka: a refusal posts
+     * nothing, so there is no event to consume, and writing both together means the notification
+     * exists exactly when the recorded failure does. The caller only gets here once per occurrence
+     * -- its guard refuses to record the same occurrence twice -- and uk_notification_schedule_once
+     * stands behind that.
+     *
+     * <p>Checked here as well, so that if anything ever does get here twice, it is a quiet no-op
+     * rather than the constraint throwing. The throw would roll back the failure being recorded,
+     * leave the occurrence due, and fail again on every tick -- and since the runner works oldest
+     * first, it would sit at the front of every batch.
+     *
+     * <p>Only the payer is told. The payee's money did not arrive either, but why is the payer's
+     * business, and "there was not enough money" about someone else's account is not the payee's to
+     * read.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void scheduledTransferMissed(MissedScheduledTransfer missed) {
+        if (notifications.existsByScheduledTransferIdAndDueOn(missed.scheduledTransferId(), missed.dueOn())) {
+            meterRegistry.counter("corebank.notifications", "outcome", "duplicate").increment();
+            return;
+        }
+        Account source = accounts.findById(missed.sourceAccountId()).orElseThrow();
+
+        Notification notification = new Notification();
+        notification.setKind(missed.outcome() == MissedScheduledTransfer.Outcome.STOPPED
+                ? NotificationKind.SCHEDULED_TRANSFER_SUSPENDED
+                : NotificationKind.SCHEDULED_TRANSFER_FAILED);
+        notification.setCustomerId(source.getCustomer().getId());
+        notification.setAccountId(source.getId());
+        notification.setScheduledTransferId(missed.scheduledTransferId());
+        notification.setDueOn(missed.dueOn());
+        notification.setAmount(Money.normalize(missed.amount()));
+        notification.setCurrency(missed.currency());
+        notification.setMessage(renderMissed(missed, source.getAccountNumber()));
+        notification.setCreatedAt(Instant.now(clock));
+        notifications.save(notification);
+
+        meterRegistry.counter("corebank.notifications", "outcome", "schedule-missed").increment();
     }
 
     @Transactional(readOnly = true)
@@ -157,6 +206,29 @@ public class NotificationService {
                 ? money + " credited to account " + account
                 : money + " debited from account " + account;
     }
+
+    /**
+     * "Your scheduled transfer of 750.00 INR from account XXXX0001, due 1 Nov 2026, was not made:
+     * there was not enough money in the account. The next one is due 1 Dec 2026."
+     *
+     * <p>The reason comes from the failure's code, never its message -- see {@link FailureReason}.
+     * The instruction's own description is left out: it is free text of any length, and the
+     * amount, account and date already say which payment this was.
+     */
+    static String renderMissed(MissedScheduledTransfer missed, String accountNumber) {
+        String money = Money.normalize(missed.amount()).toPlainString() + " " + missed.currency();
+        String sentence = "Your scheduled transfer of " + money + " from account " + masked(accountNumber)
+                + ", due " + DAY.format(missed.dueOn()) + ", was not made: "
+                + FailureReason.describe(missed.failureCode()) + ".";
+        return switch (missed.outcome()) {
+            case RETRYING -> sentence + " The next one is due " + DAY.format(missed.nextRunOn()) + ".";
+            case STOPPED -> sentence + " After " + missed.consecutiveFailures()
+                    + " failed attempts in a row it has been stopped; contact your branch to restart it.";
+            case ENDED -> sentence + " It was the last payment on this instruction.";
+        };
+    }
+
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
 
     static String masked(String accountNumber) {
         return accountNumber.length() <= 4

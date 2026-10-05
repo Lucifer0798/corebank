@@ -17,10 +17,13 @@ const CUSTOMER_ID = "cccccccc-0000-4000-8000-000000000001";
 function notification(overrides: Partial<Notification> = {}): Notification {
   return {
     id: "aaaaaaaa-0000-4000-8000-000000000001",
+    kind: "TRANSACTION",
     accountId: "11111111-1111-1111-1111-111111111111",
     transactionReference: "TXN-20261004-0001",
     transactionStatus: "POSTED",
     direction: "CREDIT",
+    scheduledTransferId: null,
+    dueOn: null,
     amount: 500,
     currency: "INR",
     message: "500.00 INR credited to account XXXX0001",
@@ -89,6 +92,45 @@ describe("NotificationsCard", () => {
     renderCard();
 
     expect(screen.getAllByText("REVERSED")).toHaveLength(1);
+  });
+
+  it("links a missed standing-order payment to the account page, for a customer too", () => {
+    // There is no transaction to open -- nothing moved -- and the account page is where the
+    // instruction itself is listed. Unlike /transactions, a customer can open their own account.
+    listing([
+      notification({
+        kind: "SCHEDULED_TRANSFER_FAILED",
+        transactionReference: null,
+        transactionStatus: null,
+        direction: null,
+        scheduledTransferId: "bbbbbbbb-0000-4000-8000-000000000001",
+        dueOn: "2026-11-01",
+        message: "Your scheduled transfer of 750.00 INR from account XXXX0001, due 1 Nov 2026, was not made",
+      }),
+    ]);
+    renderCard();
+
+    expect(screen.getByRole("link", { name: "Standing instruction" }).getAttribute("href"))
+      .toBe("/accounts/11111111-1111-1111-1111-111111111111");
+    expect(screen.getByText("FAILED")).toBeTruthy();
+  });
+
+  it("marks a stopped standing order as suspended", () => {
+    listing([
+      notification({
+        kind: "SCHEDULED_TRANSFER_SUSPENDED",
+        transactionReference: null,
+        transactionStatus: null,
+        direction: null,
+        scheduledTransferId: "bbbbbbbb-0000-4000-8000-000000000001",
+        dueOn: "2026-11-01",
+        message: "... it has been stopped",
+      }),
+    ]);
+    renderCard();
+
+    expect(screen.getByText("SUSPENDED")).toBeTruthy();
+    expect(screen.queryByText("FAILED")).toBeNull();
   });
 
   it("says so when there is nothing to show", () => {
