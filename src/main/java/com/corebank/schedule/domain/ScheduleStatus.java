@@ -22,9 +22,5 @@ public enum ScheduleStatus {
     COMPLETED,
 
     /** Stopped on request. */
-    CANCELLED;
-
-    public boolean isTerminal() {
-        return this != ACTIVE;
-    }
+    CANCELLED
 }

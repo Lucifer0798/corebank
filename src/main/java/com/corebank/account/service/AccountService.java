@@ -19,6 +19,7 @@ import com.corebank.customer.service.CustomerService;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -37,15 +38,18 @@ public class AccountService {
     private final CustomerService customerService;
     private final SequenceNumberGenerator sequences;
     private final CoreBankProperties properties;
+    private final List<AccountClosureCheck> closureChecks;
 
     public AccountService(AccountRepository accounts,
                           CustomerService customerService,
                           SequenceNumberGenerator sequences,
-                          CoreBankProperties properties) {
+                          CoreBankProperties properties,
+                          List<AccountClosureCheck> closureChecks) {
         this.accounts = accounts;
         this.customerService = customerService;
         this.sequences = sequences;
         this.properties = properties;
+        this.closureChecks = closureChecks;
     }
 
     @Transactional
@@ -128,7 +132,9 @@ public class AccountService {
     @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
     @Transactional
     public AccountResponse changeStatus(UUID accountId, AccountStatus target) {
-        Account account = require(accountId);
+        // Locked, so that what the closure checks below find is still true at commit: placing a
+        // hold, or setting up or resuming a standing instruction, takes this same row lock first.
+        Account account = requireForUpdate(accountId);
         if (!account.isCustomerAccount()) {
             throw new BusinessRuleException("INTERNAL_ACCOUNT", "General-ledger accounts cannot be changed");
         }
@@ -139,10 +145,30 @@ public class AccountService {
             throw new BusinessRuleException("BALANCE_NOT_ZERO",
                     "Account " + account.getAccountNumber() + " must be emptied before it is closed");
         }
+        if (target == AccountStatus.CLOSED) {
+            assertNothingOutstanding(account);
+        }
 
         account.setStatus(target);
         account.setClosedAt(target == AccountStatus.CLOSED ? Instant.now() : null);
         return AccountResponse.from(account);
+    }
+
+    /**
+     * Refuses to close over anything another feature still owes or is owed through this account --
+     * see {@link AccountClosureCheck}. Everything outstanding is listed at once, so staff clear it
+     * in one pass rather than discovering it one refusal at a time.
+     */
+    private void assertNothingOutstanding(Account account) {
+        List<String> outstanding = closureChecks.stream()
+                .map(check -> check.outstandingFor(account.getId()))
+                .flatMap(Optional::stream)
+                .toList();
+        if (!outstanding.isEmpty()) {
+            throw new BusinessRuleException("CLOSURE_BLOCKED",
+                    "Account " + account.getAccountNumber() + " still has " + String.join(" and ", outstanding)
+                            + "; release or cancel them before closing it");
+        }
     }
 
     /** Evicts the cached detail for one account. Called after any posting that touches its balance. */

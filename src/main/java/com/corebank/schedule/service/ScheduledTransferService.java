@@ -105,8 +105,7 @@ public class ScheduledTransferService {
         }
 
         String currency = request.currency() == null ? Money.BASE_CURRENCY : request.currency();
-        requirePostableCustomerAccount(request.sourceAccountId(), currency);
-        requirePostableCustomerAccount(request.destinationAccountId(), currency);
+        lockPostableCustomerAccounts(request.sourceAccountId(), request.destinationAccountId(), currency);
 
         ScheduledTransfer schedule = new ScheduledTransfer();
         schedule.setSourceAccountId(request.sourceAccountId());
@@ -141,8 +140,8 @@ public class ScheduledTransferService {
     @Transactional
     public ScheduledTransferResponse resume(UUID id) {
         ScheduledTransfer schedule = require(id);
-        requirePostableCustomerAccount(schedule.getSourceAccountId(), schedule.getCurrency());
-        requirePostableCustomerAccount(schedule.getDestinationAccountId(), schedule.getCurrency());
+        lockPostableCustomerAccounts(schedule.getSourceAccountId(), schedule.getDestinationAccountId(),
+                schedule.getCurrency());
         schedule.resume(LocalDate.now(clock));
         log.info("Scheduled transfer {} resumed; next due {}", id, schedule.getNextRunOn());
         return ScheduledTransferResponse.from(schedule);
@@ -258,8 +257,22 @@ public class ScheduledTransferService {
                 .orElseThrow(() -> new ResourceNotFoundException("ScheduledTransfer", id.toString()));
     }
 
+    /**
+     * Locks both accounts, in the order transfers use, and checks each can take part.
+     *
+     * <p>Locked rather than read so this cannot interleave with closing either account. Closure
+     * locks the row and then checks nothing names it; reading here without the lock could see the
+     * account open, lose the race to a closure that saw no instruction yet, and leave a live
+     * instruction on a closed account.
+     */
+    private void lockPostableCustomerAccounts(UUID sourceId, UUID destinationId, String currency) {
+        List.of(sourceId, destinationId).stream()
+                .sorted(java.util.Comparator.comparing(UUID::toString))
+                .forEach(id -> requirePostableCustomerAccount(id, currency));
+    }
+
     private void requirePostableCustomerAccount(UUID accountId, String currency) {
-        Account account = accountService.require(accountId);
+        Account account = accountService.requireForUpdate(accountId);
         if (!account.isCustomerAccount()) {
             throw new BusinessRuleException("INTERNAL_ACCOUNT",
                     "General-ledger accounts cannot be used through this endpoint");

@@ -289,6 +289,28 @@ class ScheduledTransferTest {
     }
 
     @Test
+    @DisplayName("a suspended mandate can be cancelled; a completed one cannot")
+    void cancellingASuspendedMandate() {
+        // Suspended can be resumed, so cancelling is the only way to retire one for good -- and the
+        // only way to close an account it names.
+        ScheduledTransfer suspended = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 1), null);
+        failRepeatedly(suspended, 3);
+        assertThat(suspended.getStatus()).isEqualTo(ScheduleStatus.SUSPENDED);
+
+        suspended.cancel();
+        assertThat(suspended.getStatus()).isEqualTo(ScheduleStatus.CANCELLED);
+        assertThatThrownBy(() -> suspended.resume(LocalDate.of(2026, 5, 10)))
+                .describedAs("and once cancelled it stays cancelled")
+                .extracting(ScheduledTransferTest::codeOf).isEqualTo("SCHEDULE_NOT_SUSPENDED");
+
+        ScheduledTransfer completed = mandate(ScheduleFrequency.ONCE, LocalDate.of(2026, 5, 1), null);
+        completed.recordSuccess(LocalDate.of(2026, 5, 1));
+        assertThatThrownBy(completed::cancel)
+                .describedAs("COMPLETED means the money moved; there is nothing left to stop")
+                .extracting(ScheduledTransferTest::codeOf).isEqualTo("SCHEDULE_NOT_ACTIVE");
+    }
+
+    @Test
     @DisplayName("only an active mandate with a date in reach is due")
     void dueness() {
         ScheduledTransfer schedule = mandate(ScheduleFrequency.DAILY, LocalDate.of(2026, 5, 10), null);

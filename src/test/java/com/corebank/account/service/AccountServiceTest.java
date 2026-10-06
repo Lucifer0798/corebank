@@ -60,7 +60,7 @@ class AccountServiceTest {
 
     @BeforeEach
     void setUp() {
-        accountService = new AccountService(accounts, customerService, sequences, TestProperties.defaults());
+        accountService = new AccountService(accounts, customerService, sequences, TestProperties.defaults(), java.util.List.of());
 
         customer = new Customer();
         customer.setId(UUID.randomUUID());
@@ -133,7 +133,7 @@ class AccountServiceTest {
     void closedAccountCannotBeReopened() {
         Account closed = customerAccount(AccountStatus.CLOSED);
         UUID accountId = closed.getId();
-        when(accounts.findById(accountId)).thenReturn(java.util.Optional.of(closed));
+        when(accounts.findByIdForUpdate(accountId)).thenReturn(java.util.Optional.of(closed));
 
         assertThatThrownBy(() -> accountService.changeStatus(accountId, AccountStatus.ACTIVE))
                 .isInstanceOf(BusinessRuleException.class)
@@ -149,7 +149,7 @@ class AccountServiceTest {
         // The mirror of the test above: the guard has to reject CLOSED specifically, not any
         // status that happens to be non-ACTIVE.
         Account frozen = customerAccount(AccountStatus.FROZEN);
-        when(accounts.findById(frozen.getId())).thenReturn(java.util.Optional.of(frozen));
+        when(accounts.findByIdForUpdate(frozen.getId())).thenReturn(java.util.Optional.of(frozen));
 
         assertThat(accountService.changeStatus(frozen.getId(), AccountStatus.ACTIVE).status())
                 .isEqualTo(AccountStatus.ACTIVE);

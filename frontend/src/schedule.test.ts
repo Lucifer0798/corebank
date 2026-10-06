@@ -87,11 +87,12 @@ describe("scheduleAttention", () => {
 });
 
 describe("canCancel", () => {
-  it("allows cancelling only a live mandate", () => {
+  it("allows cancelling a live or suspended mandate, and nothing finished", () => {
     // The backend refuses the rest with SCHEDULE_NOT_ACTIVE, so offering the button would only
-    // produce an error the user could not have avoided.
+    // produce an error the user could not have avoided. Suspended is cancellable: it can be
+    // resumed, and an account it names cannot close until it is retired.
     expect(canCancel(schedule())).toBe(true);
-    expect(canCancel(schedule({ status: "SUSPENDED" }))).toBe(false);
+    expect(canCancel(schedule({ status: "SUSPENDED" }))).toBe(true);
     expect(canCancel(schedule({ status: "COMPLETED" }))).toBe(false);
     expect(canCancel(schedule({ status: "CANCELLED" }))).toBe(false);
   });

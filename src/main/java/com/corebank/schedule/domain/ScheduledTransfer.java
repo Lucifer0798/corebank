@@ -192,8 +192,13 @@ public class ScheduledTransfer extends AuditableEntity {
         this.status = ScheduleStatus.ACTIVE;
     }
 
+    /**
+     * Stops it for good. Allowed from SUSPENDED as well as ACTIVE: a suspended instruction can be
+     * resumed, so the only way to be sure it never runs again -- and the only way to close an
+     * account it names -- is to cancel it.
+     */
     public void cancel() {
-        if (status.isTerminal()) {
+        if (status == ScheduleStatus.COMPLETED || status == ScheduleStatus.CANCELLED) {
             throw new BusinessRuleException("SCHEDULE_NOT_ACTIVE",
                     "This schedule is already " + status.name().toLowerCase());
         }
