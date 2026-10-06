@@ -533,6 +533,32 @@ in the database; a capture arriving then is refused on the clock rather than hon
 background job happened not to have run. The sweep only gives the customer their available balance
 back, which is why it can afford to be slow.
 
+### Closing an account
+
+Closing used to check only for a zero balance, which is not enough. Two things could still be
+attached to an account at zero, and closing under either broke a promise someone else relied on:
+
+- **An active hold.** A current account can sit at zero inside its overdraft while carrying an
+  authorisation. It closed anyway, and the merchant's capture was then refused because the
+  account was closed. That is exactly what the hold existed to prevent.
+- **A standing instruction, on either side.** The runner keeps firing at an account whatever its
+  status, so every occurrence was refused and, since notifications, announced to the payer as a
+  failure until the instruction suspended. When the closed account is the payee, that payer is
+  another customer.
+
+Closure now refuses with `CLOSURE_BLOCKED` and lists everything outstanding at once ("still has 1
+outstanding hold and 2 standing instructions"). Staff then clear it all in one pass, rather than
+finding each item through a separate refusal. It **refuses rather than cancelling**: quietly
+stopping another customer's instruction is worse than asking staff to deal with it on purpose.
+
+Each feature that owns such an obligation reports it through an `AccountClosureCheck`, so the
+account package does not depend on every package that depends on it. The checks run with the
+account's row locked. Placing a hold already takes that lock, and creating or resuming a standing
+instruction now does too, locking both accounts in the order transfers use. Without that,
+setting up an instruction could see the account still open, slip in after closure's check, and
+leave a live instruction on a closed account. A test holds the lock to prove that creation waits
+and is then refused.
+
 ### Scheduled transfers
 
 A standing instruction is the only thing here that moves money with no request behind it, and
@@ -583,6 +609,8 @@ would move to the 5th. Three rules, each with a test that fails without it:
   account being frozen or closed.
 
 A one-off, or a mandate past its end date, has nothing left to run, so resuming it is refused.
+A suspended mandate can also be **cancelled**. Because it could be resumed, cancelling is how it is
+retired for good, and an account it names cannot close until that happens.
 
 **One broken mandate cannot stall the rest.** The runner works oldest first. Anything that threw
 out of the loop for one mandate (claiming its row, or recording the outcome) used to abort the
@@ -929,7 +957,7 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/customers/{id}/accounts` | owner, staff | Accounts a customer holds |
 | `POST` | `/api/v1/accounts/{id}/freeze` | TELLER, ADMIN | Freeze an account |
 | `POST` | `/api/v1/accounts/{id}/unfreeze` | TELLER, ADMIN | Return it to service |
-| `POST` | `/api/v1/accounts/{id}/close` | ADMIN | Close a zero-balance account |
+| `POST` | `/api/v1/accounts/{id}/close` | ADMIN | Close an account: zero balance, no active holds, no live or suspended standing instructions |
 | `POST` | `/api/v1/accounts/{id}/deposits` | TELLER, ADMIN | Deposit — needs `Idempotency-Key` |
 | `POST` | `/api/v1/accounts/{id}/withdrawals` | TELLER, ADMIN | Withdraw — needs `Idempotency-Key` |
 | `POST` | `/api/v1/transfers` | TELLER, ADMIN | Transfer — needs `Idempotency-Key` |
