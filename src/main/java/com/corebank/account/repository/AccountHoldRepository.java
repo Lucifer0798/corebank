@@ -79,4 +79,7 @@ public interface AccountHoldRepository extends JpaRepository<AccountHold, UUID> 
             WHERE h.account.id = :accountId AND h.status = com.corebank.account.domain.HoldStatus.ACTIVE
             """)
     java.math.BigDecimal sumOutstandingFor(@Param("accountId") UUID accountId);
+
+    /** How many holds on one account are in a given state -- closure asks about ACTIVE ones. */
+    long countByAccount_IdAndStatus(UUID accountId, HoldStatus status);
 }

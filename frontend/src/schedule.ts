@@ -43,9 +43,13 @@ export function canResume(schedule: ScheduledTransfer): boolean {
   return schedule.status === "SUSPENDED";
 }
 
-/** Only a live mandate can be stopped; the backend refuses the rest with SCHEDULE_NOT_ACTIVE. */
+/**
+ * A live or suspended mandate can be stopped; the backend refuses the rest with SCHEDULE_NOT_ACTIVE.
+ * Suspended counts because it can be resumed -- cancelling is how it is retired for good, and an
+ * account it names cannot close until it is.
+ */
 export function canCancel(schedule: ScheduledTransfer): boolean {
-  return schedule.status === "ACTIVE";
+  return schedule.status === "ACTIVE" || schedule.status === "SUSPENDED";
 }
 
 /**

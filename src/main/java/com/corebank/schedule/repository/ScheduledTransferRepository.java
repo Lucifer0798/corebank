@@ -50,4 +50,13 @@ public interface ScheduledTransferRepository extends JpaRepository<ScheduledTran
             WHERE s.sourceAccountId = :accountId OR s.destinationAccountId = :accountId
             """)
     Page<ScheduledTransfer> findForAccount(@Param("accountId") UUID accountId, Pageable pageable);
+
+    /** Instructions naming this account on either side, in any of the given states. */
+    @Query("""
+            SELECT COUNT(s) FROM ScheduledTransfer s
+            WHERE (s.sourceAccountId = :accountId OR s.destinationAccountId = :accountId)
+              AND s.status IN :statuses
+            """)
+    long countForAccountWithStatusIn(@Param("accountId") UUID accountId,
+                                     @Param("statuses") java.util.Collection<ScheduleStatus> statuses);
 }
