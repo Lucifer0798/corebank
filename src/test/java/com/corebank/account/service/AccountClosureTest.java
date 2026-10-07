@@ -106,6 +106,21 @@ class AccountClosureTest {
     }
 
     @Test
+    @DisplayName("a closed account takes no new holds, even with its overdraft still configured")
+    void aClosedAccountRefusesAHold() {
+        // Closure checks nothing is outstanding; this is the other half -- nothing new afterwards.
+        // A current account closes at zero but keeps its overdraft limit, so its available balance
+        // is still 500 and the affordability check alone would let the hold through.
+        UUID current = accountService.open(new OpenAccountRequest(
+                customerId, AccountType.CURRENT, "INR", new BigDecimal("500.00"))).id();
+        close(current);
+
+        assertThatThrownBy(() -> holdService.place(current,
+                new PlaceHoldRequest(new BigDecimal("100.00"), "INR", "Hotel", 24)))
+                .extracting(AccountClosureTest::codeOf).isEqualTo("ACCOUNT_CLOSED");
+    }
+
+    @Test
     @DisplayName("a live standing instruction blocks closure on either side of it")
     void aStandingInstructionBlocksBothAccounts() {
         // The payee side matters as much: the instruction may be another customer's, and closing

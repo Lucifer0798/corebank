@@ -25,7 +25,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 
 | Capability | Detail |
 | --- | --- |
-| Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot hold an account. |
+| Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot open an account, and money cannot leave the accounts of one whose KYC lapses later; payments in still arrive. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
 | FX | Cross-currency transfers, posted as four legs through per-currency position accounts, with the book valued and marked to market. |
@@ -533,6 +533,33 @@ in the database; a capture arriving then is refused on the clock rather than hon
 background job happened not to have run. The sweep only gives the customer their available balance
 back, which is why it can afford to be slow.
 
+### KYC after opening
+
+KYC used to be checked once, when an account was opened, and never again. An admin could reject a
+customer after a failed re-check or a sanctions hit, and every account they already held kept
+working: withdrawals, transfers, holds and standing orders alike. A throwaway test confirmed it
+before anything changed.
+
+Now **money cannot leave** the accounts of a customer who is not `VERIFIED`, whether they were
+rejected or sent back to `PENDING` for a re-review. Every path money leaves by is covered:
+withdrawals (which includes capturing a hold), the paying side of a transfer (which includes a
+standing order's occurrences), placing a hold, and setting up or resuming a standing order. All
+of them refuse with `CUSTOMER_NOT_VERIFIED`. The rule lives in one place, `Account.assertCanSendMoney`.
+
+- **Payments in still arrive:** deposits, incoming transfers, interest. This is a policy choice.
+  The customer is restricted rather than cut off, and nobody paying them has a payment bounce for
+  a reason that is none of their business.
+- **Reversals are exempt**, as they are from velocity limits. A correction the bank owes must never
+  be refused, even when it takes money back out.
+- **It is read live**, not recorded on each account, so verifying the customer again lifts it at
+  once. There is no list of accounts to unfreeze, and no state that can drift from the customer's.
+- **A hold placed before the restriction cannot be captured during it.** A capture is a
+  withdrawal. This is the same policy a freeze has, and both are pinned in tests so that changing
+  either is a deliberate act.
+- **An existing standing order fails** like any other refused debit, and the payer is notified. The
+  reason shown is the generic "could not be processed", because the instruction is visible to the
+  payee as well and the payer's KYC status is not theirs to learn.
+
 ### Closing an account
 
 Closing used to check only for a zero balance, which is not enough. Two things could still be
@@ -1023,6 +1050,7 @@ as REST, passed as `authorization` metadata.
 | `DAILY_LIMIT_EXCEEDED` | 422 | The account's daily debit allowance is spent; the message says how much remains |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
+| `CUSTOMER_NOT_VERIFIED` | 422 | Money cannot leave this account: its owner's KYC is no longer verified. Payments in still arrive |
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
 | `SAME_ACCOUNT_TRANSFER` | 422 | Source and destination are the same account |
 | `FX_RATE_UNAVAILABLE` | 422 | The bank does not quote that currency pair |

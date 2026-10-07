@@ -112,7 +112,8 @@ public class Account extends AuditableEntity {
      * account goes short when they are captured.
      */
     public void placeHold(BigDecimal amount) {
-        assertPostable();
+        // A hold reserves money to leave, so it is refused wherever a debit would be.
+        assertCanSendMoney();
         if (availableBalance().compareTo(amount) < 0) {
             throw new InsufficientFundsException(accountNumber, availableBalance(), amount);
         }
@@ -239,6 +240,27 @@ public class Account extends AuditableEntity {
         }
         if (status == AccountStatus.FROZEN) {
             throw new BusinessRuleException("ACCOUNT_FROZEN", "Account " + accountNumber + " is frozen");
+        }
+    }
+
+    /**
+     * Guards for money <em>leaving</em> this account: everything {@link #assertPostable()} checks,
+     * and that its owner is still KYC-verified.
+     *
+     * <p>Outgoing only, deliberately. Payments in still arrive -- a salary, a refund, interest -- so
+     * a customer under review is restricted rather than cut off, and nobody paying them has a
+     * payment bounce for a reason that is none of their business. Re-verifying the customer lifts
+     * it at once, since this is read live rather than recorded on the account.
+     *
+     * <p>Not applied to reversals. A correction the bank owes must never be refused, the same
+     * reason they are exempt from velocity limits.
+     */
+    public void assertCanSendMoney() {
+        assertPostable();
+        if (isCustomerAccount() && !customer.canSendMoney()) {
+            throw new BusinessRuleException("CUSTOMER_NOT_VERIFIED",
+                    "The owner of account " + accountNumber + " is not KYC-verified, so money cannot leave "
+                            + "it; payments into it still arrive");
         }
     }
 

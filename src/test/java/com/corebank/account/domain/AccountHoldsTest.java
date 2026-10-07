@@ -1,5 +1,8 @@
 package com.corebank.account.domain;
 
+import com.corebank.customer.domain.Customer;
+import com.corebank.customer.domain.CustomerStatus;
+import com.corebank.customer.domain.KycStatus;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,6 +36,12 @@ class AccountHoldsTest {
         account.setBalance(new BigDecimal(balance));
         account.setOverdraftLimit(new BigDecimal(overdraft));
         account.setStatus(AccountStatus.ACTIVE);
+        // Every customer account has a customer (V1's ck on account_class), and money leaving it
+        // asks whether they are still KYC-verified -- so the fixture needs one that is.
+        Customer owner = new Customer();
+        owner.setStatus(CustomerStatus.ACTIVE);
+        owner.setKycStatus(KycStatus.VERIFIED);
+        account.setCustomer(owner);
         return account;
     }
 

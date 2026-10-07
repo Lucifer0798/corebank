@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.corebank.account.domain.AccountType;
+import com.corebank.account.domain.AccountStatus;
 import com.corebank.account.domain.HoldStatus;
 import com.corebank.account.dto.CaptureHoldRequest;
 import com.corebank.account.dto.HoldResponse;
@@ -281,6 +282,37 @@ class HoldServiceTest {
 
         assertThat(accountService.require(accountId).getHeldAmount()).isEqualByComparingTo(fromHolds);
         assertThat(fromHolds).isEqualByComparingTo("150.00");
+    }
+
+    @Test
+    @DisplayName("a frozen account takes no new holds")
+    void aFrozenAccountRefusesAHold() {
+        accountService.changeStatus(accountId, AccountStatus.FROZEN);
+
+        assertThatThrownBy(() -> place("100.00"))
+                .isInstanceOf(BusinessRuleException.class)
+                .extracting(ex -> ((BusinessRuleException) ex).getCode())
+                .isEqualTo("ACCOUNT_FROZEN");
+        assertThat(accountService.require(accountId).getHeldAmount()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    @DisplayName("a hold placed before a freeze cannot be captured while it lasts")
+    void aFreezeAlsoStopsCapturingEarlierHolds() {
+        // Pinned on purpose, because it is a policy and not an accident: a capture is a withdrawal,
+        // and a freeze -- often fraud or a legal order -- stops withdrawals. Card schemes usually
+        // honour an authorisation already given, so if that is ever wanted, this is the test that
+        // should change, deliberately.
+        String reference = place("100.00").reference();
+        accountService.changeStatus(accountId, AccountStatus.FROZEN);
+
+        assertThatThrownBy(() -> holdService.capture(reference, new CaptureHoldRequest(null)))
+                .isInstanceOf(BusinessRuleException.class)
+                .extracting(ex -> ((BusinessRuleException) ex).getCode())
+                .isEqualTo("ACCOUNT_FROZEN");
+        assertThat(holdService.get(reference).status())
+                .describedAs("the refusal leaves the hold outstanding, to capture after an unfreeze or release")
+                .isEqualTo(HoldStatus.ACTIVE);
     }
 
     @Test

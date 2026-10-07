@@ -68,4 +68,14 @@ public class Customer extends AuditableEntity {
     public boolean canOpenAccounts() {
         return status == CustomerStatus.ACTIVE && kycStatus == KycStatus.VERIFIED;
     }
+
+    /**
+     * Whether money may leave this customer's accounts. The same standard as opening one, applied
+     * for as long as the accounts exist rather than once at the door: a KYC decision reversed after
+     * opening -- a failed re-check, a sanctions hit -- used to change nothing about what the
+     * accounts could do.
+     */
+    public boolean canSendMoney() {
+        return status == CustomerStatus.ACTIVE && kycStatus == KycStatus.VERIFIED;
+    }
 }
