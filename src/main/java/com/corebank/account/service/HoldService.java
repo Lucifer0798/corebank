@@ -84,12 +84,6 @@ public class HoldService {
             throw new BusinessRuleException("INTERNAL_ACCOUNT",
                     "General-ledger accounts cannot be used through this endpoint");
         }
-        // The same status guard every posting applies. Without it a frozen account kept taking new
-        // authorisations, and a closed one could too -- a current account closes at zero but keeps
-        // its overdraft, so it still has available balance -- and every capture of them was then
-        // refused, because the withdrawal a capture makes does check. A hold that can never be
-        // captured is a promise to a merchant the bank cannot keep.
-        account.assertPostable();
         account.assertCurrency(currency);
 
         // The velocity check belongs here rather than at capture. A capture is exempt -- refusing
