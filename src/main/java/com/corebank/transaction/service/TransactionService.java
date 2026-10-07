@@ -116,6 +116,7 @@ public class TransactionService {
         }
 
         Account account = customerAccountForUpdate(accountId, currency);
+        account.assertCanSendMoney();
         // In the account's own currency. A rupee cash leg against a dollar account cannot
         // balance, which is the bug V12 fixes -- see AccountService.internalAccount.
         Account cash = accountService.cashAccount(currency);
@@ -154,6 +155,8 @@ public class TransactionService {
         lockOrder.forEach(accountService::requireForUpdate);
 
         Account source = customerAccountForUpdate(request.sourceAccountId(), currency);
+        // The paying side only: a transfer into a restricted customer's account still lands.
+        source.assertCanSendMoney();
         Account destination = customerAccountForUpdate(request.destinationAccountId());
 
         BankTransaction transaction = newTransaction(

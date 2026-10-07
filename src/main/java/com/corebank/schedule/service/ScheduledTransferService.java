@@ -269,6 +269,9 @@ public class ScheduledTransferService {
         List.of(sourceId, destinationId).stream()
                 .sorted(java.util.Comparator.comparing(UUID::toString))
                 .forEach(id -> requirePostableCustomerAccount(id, currency));
+        // An instruction whose payer cannot send money would only fail, and notify them, on every
+        // occurrence. Refused up front instead -- one paying into a restricted customer is fine.
+        accountService.requireForUpdate(sourceId).assertCanSendMoney();
     }
 
     private void requirePostableCustomerAccount(UUID accountId, String currency) {
