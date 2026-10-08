@@ -63,7 +63,7 @@ class FxTransferTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Farah", "Qureshi", "farah.qureshi." + n + "@example.com", null,
                 LocalDate.of(1987, 7, 7))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         rupeeAccount = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

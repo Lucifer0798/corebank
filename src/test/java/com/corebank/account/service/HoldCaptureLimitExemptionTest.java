@@ -63,7 +63,7 @@ class HoldCaptureLimitExemptionTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Leena", "Varma", "leena.varma." + unique + "@example.com", null,
                 LocalDate.of(1991, 9, 30))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         accountId = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

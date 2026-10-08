@@ -56,7 +56,7 @@ class InterestServiceTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Devika", "Nair", "devika.nair." + n + "@example.com", null,
                 LocalDate.of(1990, 2, 14))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         accountId = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

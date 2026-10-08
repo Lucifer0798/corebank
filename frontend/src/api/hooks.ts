@@ -6,6 +6,7 @@ import type {
   Balance,
   Customer,
   CustomerSearchHit,
+  KycDecision,
   KycStatus,
   Notification,
   PagedResponse,
@@ -81,16 +82,34 @@ export function useCreateCustomer() {
   });
 }
 
+export interface KycDecisionInput {
+  kycStatus: KycStatus;
+  /** Required by the backend for anything but VERIFIED; kept with the decision. */
+  reason?: string;
+}
+
+/** Who decided comes from the caller's token on the backend, so it is not something this sends. */
 export function useUpdateKyc(customerId: string) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (kycStatus: KycStatus) =>
-      api.patch<Customer>(`/customers/${customerId}/kyc`, { kycStatus }),
+    mutationFn: (input: KycDecisionInput) =>
+      api.patch<Customer>(`/customers/${customerId}/kyc`, input),
     onSuccess: (customer) => {
       queryClient.setQueryData(["customer", customerId], customer);
       queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["kycDecisions", customerId] });
     },
+  });
+}
+
+/** Every KYC decision on a customer, newest first. Staff only. */
+export function useKycDecisions(customerId: string, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["kycDecisions", customerId, page],
+    queryFn: () =>
+      api.get<PagedResponse<KycDecision>>(`/customers/${customerId}/kyc-decisions`, { page, size: 10 }),
   });
 }
 

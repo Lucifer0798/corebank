@@ -84,7 +84,7 @@ class KycRestrictionTest {
     private UUID customer(String name) {
         UUID id = customerService.create(new CreateCustomerRequest(name, "Das",
                 name.toLowerCase() + "." + UUID.randomUUID() + "@example.com", null, LocalDate.of(1990, 1, 1))).id();
-        customerService.updateKyc(id, KycStatus.VERIFIED);
+        customerService.updateKyc(id, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
         return id;
     }
 
@@ -116,7 +116,7 @@ class KycRestrictionTest {
     @Test
     @DisplayName("a rejected customer cannot send money, and can still receive it")
     void outgoingIsBlockedAndIncomingIsNot() {
-        customerService.updateKyc(restricted, KycStatus.REJECTED);
+        customerService.updateKyc(restricted, KycStatus.REJECTED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         assertNotVerified(() -> transactionService.withdraw(restrictedAccount, amount("100.00"), key()));
         assertNotVerified(() -> transactionService.transfer(
@@ -137,7 +137,7 @@ class KycRestrictionTest {
         // A system posting crediting the customer -- the clearest case of money owed to them that a
         // restriction on sending must not touch.
         interestService.accrue(restrictedAccount, LocalDate.of(2026, 6, 1));
-        customerService.updateKyc(restricted, KycStatus.REJECTED);
+        customerService.updateKyc(restricted, KycStatus.REJECTED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         assertThat(interestService.capitalise(restrictedAccount)).isPresent();
         assertThat(balanceOf(restrictedAccount)).isGreaterThan(new BigDecimal("1000.00"));
@@ -147,7 +147,7 @@ class KycRestrictionTest {
     @DisplayName("being sent back to PENDING restricts as well as a rejection does")
     void pendingAlsoBlocks() {
         // A re-review in progress is not a verification. The rule is "verified", not "not rejected".
-        customerService.updateKyc(restricted, KycStatus.PENDING);
+        customerService.updateKyc(restricted, KycStatus.PENDING, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         assertNotVerified(() -> transactionService.withdraw(restrictedAccount, amount("100.00"), key()));
     }
@@ -156,10 +156,10 @@ class KycRestrictionTest {
     @DisplayName("verifying the customer again lifts the restriction at once")
     void reVerifyingLiftsIt() {
         // Read live from the customer, not recorded on each account, so there is nothing to undo.
-        customerService.updateKyc(restricted, KycStatus.REJECTED);
+        customerService.updateKyc(restricted, KycStatus.REJECTED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
         assertNotVerified(() -> transactionService.withdraw(restrictedAccount, amount("100.00"), key()));
 
-        customerService.updateKyc(restricted, KycStatus.VERIFIED);
+        customerService.updateKyc(restricted, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
         transactionService.withdraw(restrictedAccount, amount("100.00"), key());
 
         assertThat(balanceOf(restrictedAccount)).isEqualByComparingTo("900.00");
@@ -170,7 +170,7 @@ class KycRestrictionTest {
     void reversalsAreExempt() {
         // A correction the bank owes must never be refused. Reversing a deposit debits the account.
         String deposit = transactionService.deposit(restrictedAccount, amount("300.00"), key()).reference();
-        customerService.updateKyc(restricted, KycStatus.REJECTED);
+        customerService.updateKyc(restricted, KycStatus.REJECTED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         transactionService.reverse(deposit, new ReversalRequest("Keyed against the wrong account"), key());
 
@@ -186,7 +186,7 @@ class KycRestrictionTest {
         // HoldServiceTest -- and the hold stays outstanding to capture once re-verified, or release.
         String earlier = holdService.place(restrictedAccount,
                 new PlaceHoldRequest(new BigDecimal("100.00"), "INR", "Hotel", 24)).reference();
-        customerService.updateKyc(restricted, KycStatus.REJECTED);
+        customerService.updateKyc(restricted, KycStatus.REJECTED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         assertNotVerified(() -> holdService.place(restrictedAccount,
                 new PlaceHoldRequest(new BigDecimal("100.00"), "INR", "Hotel", 24)));
@@ -197,7 +197,7 @@ class KycRestrictionTest {
     @Test
     @DisplayName("no standing order can be set up to pay out, but one paying in can")
     void standingOrdersFromARestrictedCustomerAreRefused() {
-        customerService.updateKyc(restricted, KycStatus.REJECTED);
+        customerService.updateKyc(restricted, KycStatus.REJECTED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         assertNotVerified(() -> scheduledTransfers.create(new CreateScheduledTransferRequest(restrictedAccount,
                 verifiedAccount, new BigDecimal("100.00"), "INR", "Rent", ScheduleFrequency.MONTHLY, today, null)));
@@ -216,7 +216,7 @@ class KycRestrictionTest {
         // to put on a list the payee can read.
         UUID schedule = scheduledTransfers.create(new CreateScheduledTransferRequest(restrictedAccount,
                 verifiedAccount, new BigDecimal("100.00"), "INR", "Rent", ScheduleFrequency.MONTHLY, today, null)).id();
-        customerService.updateKyc(restricted, KycStatus.REJECTED);
+        customerService.updateKyc(restricted, KycStatus.REJECTED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         new ScheduledTransferRunner(scheduledTransfers, new SimpleMeterRegistry(),
                 Clock.fixed(today.atStartOfDay(ZoneOffset.UTC).toInstant(), ZoneOffset.UTC)).run();

@@ -65,7 +65,7 @@ class AccountClosureTest {
         today = LocalDate.now(ZoneOffset.UTC);
         customerId = customerService.create(new CreateCustomerRequest("Meera", "Pillai",
                 "meera.pillai." + n + "." + UUID.randomUUID() + "@example.com", null, LocalDate.of(1990, 1, 1))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
     }
 
     private UUID savings() {

@@ -85,7 +85,7 @@ class ScheduledTransferRunnerTest {
         customerId = customerService.create(new CreateCustomerRequest(
                 "Ravi", "Iyer", "ravi.iyer." + n + "@example.com", null,
                 LocalDate.of(1990, 1, 1))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         source = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

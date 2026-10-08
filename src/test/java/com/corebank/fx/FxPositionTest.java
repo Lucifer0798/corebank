@@ -65,7 +65,7 @@ class FxPositionTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Omar", "Siddiqui", "omar.siddiqui." + n + "@example.com", null,
                 LocalDate.of(1983, 11, 3))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         rupeeAccount = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

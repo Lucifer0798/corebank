@@ -77,7 +77,7 @@ class CrossFeatureTest {
         customerId = customerService.create(new CreateCustomerRequest(
                 "Sana", "Malik", "sana.malik." + n + "@example.com", null,
                 LocalDate.of(1989, 5, 20))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         rupeeAccount = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

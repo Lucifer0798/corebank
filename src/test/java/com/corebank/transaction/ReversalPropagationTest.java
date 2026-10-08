@@ -69,7 +69,7 @@ class ReversalPropagationTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Tariq", "Hussain", "tariq.hussain." + n + "@example.com", null,
                 LocalDate.of(1984, 8, 15))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
         accountId = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();
         transactionService.deposit(accountId,

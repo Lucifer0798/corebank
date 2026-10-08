@@ -110,7 +110,7 @@ class OutboxRelayIT {
         CustomerResponse customer = customerService.create(new CreateCustomerRequest(
                 "Outbox", "Resilience", "outbox-" + UUID.randomUUID() + "@example.com", null,
                 LocalDate.of(1990, 1, 1)));
-        customerService.updateKyc(customer.id(), KycStatus.VERIFIED);
+        customerService.updateKyc(customer.id(), KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
         AccountResponse account = accountService.open(
                 new OpenAccountRequest(customer.id(), AccountType.SAVINGS, "INR", BigDecimal.ZERO));
 

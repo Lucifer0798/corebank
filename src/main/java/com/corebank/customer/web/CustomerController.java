@@ -1,8 +1,10 @@
 package com.corebank.customer.web;
 
 import com.corebank.common.web.PagedResponse;
+import com.corebank.customer.domain.KycDecider;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.dto.CustomerResponse;
+import com.corebank.customer.dto.KycDecisionResponse;
 import com.corebank.customer.dto.LinkIdentityRequest;
 import com.corebank.customer.dto.UpdateKycRequest;
 import com.corebank.customer.service.CustomerService;
@@ -74,10 +76,26 @@ public class CustomerController {
 
     @PatchMapping("/{customerId}/kyc")
     @PreAuthorize("hasRole('ADMIN')")
-    @Operation(summary = "Record a KYC decision")
+    @Operation(summary = "Record a KYC decision",
+            description = "Recorded with who made it -- taken from the caller's token, never from the body -- "
+                    + "and why. A reason is required for anything but VERIFIED.")
     public CustomerResponse updateKyc(@PathVariable UUID customerId,
-                                      @Valid @RequestBody UpdateKycRequest request) {
-        return customerService.updateKyc(customerId, request.kycStatus());
+                                      @Valid @RequestBody UpdateKycRequest request,
+                                      @AuthenticationPrincipal Jwt jwt) {
+        KycDecider decider = new KycDecider(jwt.getSubject(), jwt.getClaimAsString("preferred_username"));
+        return customerService.updateKyc(customerId, request.kycStatus(), request.reason(), decider);
+    }
+
+    @GetMapping("/{customerId}/kyc-decisions")
+    @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
+    @Operation(summary = "A customer's KYC decisions, newest first",
+            description = "Who decided, from what to what, and why. Starts when this history was introduced; "
+                    + "earlier decisions were never recorded.")
+    public PagedResponse<KycDecisionResponse> kycDecisions(
+            @PathVariable UUID customerId,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return PagedResponse.of(customerService.kycDecisions(customerId, PageRequest.of(page, size)));
     }
 
     @PatchMapping("/{customerId}/identity")

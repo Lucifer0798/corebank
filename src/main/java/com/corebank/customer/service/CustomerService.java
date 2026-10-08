@@ -6,12 +6,17 @@ import com.corebank.common.exception.ConflictException;
 import com.corebank.common.exception.ResourceNotFoundException;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.domain.CustomerStatus;
+import com.corebank.customer.domain.KycDecider;
+import com.corebank.customer.domain.KycDecision;
 import com.corebank.customer.domain.KycStatus;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.dto.CustomerResponse;
+import com.corebank.customer.dto.KycDecisionResponse;
 import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.customer.repository.CustomerRepository;
+import com.corebank.customer.repository.KycDecisionRepository;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Period;
 import java.util.UUID;
@@ -31,10 +36,12 @@ public class CustomerService {
     private final SequenceNumberGenerator sequences;
     private final Clock clock;
     private final ApplicationEventPublisher eventPublisher;
+    private final KycDecisionRepository decisions;
 
     public CustomerService(CustomerRepository customers, SequenceNumberGenerator sequences, Clock clock,
-                            ApplicationEventPublisher eventPublisher) {
+                            ApplicationEventPublisher eventPublisher, KycDecisionRepository decisions) {
         this.customers = customers;
+        this.decisions = decisions;
         this.sequences = sequences;
         this.clock = clock;
         this.eventPublisher = eventPublisher;
@@ -81,12 +88,30 @@ public class CustomerService {
         return customers.findAll(pageable).map(CustomerResponse::from);
     }
 
+    /**
+     * Records a KYC decision and applies it, together.
+     *
+     * <p>Moving a customer away from VERIFIED needs a reason. That is the decision with
+     * consequences -- money stops leaving their accounts -- and the one somebody will later ask
+     * about. Verifying needs none, though one may be given.
+     *
+     * <p>The history row is written in the same transaction as the status change, so there is no
+     * state in which a customer's KYC changed and the record of who changed it is missing.
+     */
     @Transactional
-    public CustomerResponse updateKyc(UUID id, KycStatus kycStatus) {
+    public CustomerResponse updateKyc(UUID id, KycStatus kycStatus, String reason, KycDecider decidedBy) {
         Customer customer = require(id);
         if (customer.getStatus() == CustomerStatus.CLOSED) {
             throw new BusinessRuleException("CUSTOMER_CLOSED", "A closed customer cannot be re-reviewed");
         }
+        String statedReason = reason == null || reason.isBlank() ? null : reason.strip();
+        if (kycStatus != KycStatus.VERIFIED && statedReason == null) {
+            throw new BusinessRuleException("KYC_REASON_REQUIRED",
+                    "Say why: a customer who is not verified cannot send money, and the reason is kept "
+                            + "with the decision");
+        }
+        decisions.save(new KycDecision(customer.getId(), customer.getKycStatus(), kycStatus, decidedBy,
+                statedReason, Instant.now(clock)));
         customer.setKycStatus(kycStatus);
         eventPublisher.publishEvent(CustomerChangedEvent.from(customer));
         return CustomerResponse.from(customer);
@@ -108,6 +133,13 @@ public class CustomerService {
         customer.setKeycloakSubject(keycloakSubject);
         eventPublisher.publishEvent(CustomerChangedEvent.from(customer));
         return CustomerResponse.from(customer);
+    }
+
+    /** Every KYC decision on this customer, newest first. */
+    @Transactional(readOnly = true)
+    public Page<KycDecisionResponse> kycDecisions(UUID id, Pageable pageable) {
+        require(id);
+        return decisions.findByCustomerIdOrderByDecidedAtDesc(id, pageable).map(KycDecisionResponse::from);
     }
 
     /** Loads a customer for other services, raising the standard 404 when absent. */
