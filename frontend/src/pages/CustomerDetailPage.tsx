@@ -6,9 +6,9 @@ import {
   useCustomer,
   useLinkIdentity,
   useOpenAccount,
-  useUpdateKyc,
 } from "../api/hooks";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { KycCard } from "../components/KycCard";
 import { NotificationsCard } from "../components/Notifications";
 import { SpendingInsights } from "../components/SpendingInsights";
 import { StatusPill } from "../components/StatusPill";
@@ -22,7 +22,6 @@ export function CustomerDetailPage() {
 
   const { data: customer, isLoading, error } = useCustomer(customerId);
   const { data: accounts } = useAccountsForCustomer(customerId);
-  const updateKyc = useUpdateKyc(customerId!);
   const [showOpenAccount, setShowOpenAccount] = useState(false);
 
   if (isLoading) return <p className="muted">Loading&hellip;</p>;
@@ -59,22 +58,9 @@ export function CustomerDetailPage() {
           {customer.email} {customer.phone ? `· ${customer.phone}` : ""}
         </p>
 
-        {admin && customer.kycStatus === "PENDING" && (
-          <div className="btn-row" style={{ marginTop: "0.75rem" }}>
-            <ErrorBanner error={updateKyc.error} />
-            <button className="btn" onClick={() => updateKyc.mutate("VERIFIED")} disabled={updateKyc.isPending}>
-              Verify KYC
-            </button>
-            <button
-              className="btn btn--danger"
-              onClick={() => updateKyc.mutate("REJECTED")}
-              disabled={updateKyc.isPending}
-            >
-              Reject KYC
-            </button>
-          </div>
-        )}
       </div>
+
+      <KycCard customerId={customer.id} current={customer.kycStatus} admin={admin} />
 
       {!customer.identityLinked && <LinkIdentityCard customerId={customer.id} />}
 

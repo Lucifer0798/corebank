@@ -82,7 +82,7 @@ class HoldServiceTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Nadia", "Rahman", "nadia.rahman." + n + "@example.com", null,
                 LocalDate.of(1988, 6, 2))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         accountId = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

@@ -21,6 +21,19 @@ export interface PagedResponse<T> {
   last: boolean;
 }
 
+/** Mirrors com.corebank.customer.dto.KycDecisionResponse. History starts when it was introduced. */
+export interface KycDecision {
+  id: string;
+  fromStatus: KycStatus;
+  toStatus: KycStatus;
+  /** The decider's token subject, or `system:<process>` for a non-human one. */
+  decidedBySubject: string;
+  decidedByName: string | null;
+  /** Always present on a move away from VERIFIED. */
+  reason: string | null;
+  decidedAt: string;
+}
+
 export interface Customer {
   id: string;
   customerNumber: string;

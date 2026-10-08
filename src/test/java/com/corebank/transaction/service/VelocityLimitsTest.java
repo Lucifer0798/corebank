@@ -75,7 +75,7 @@ class VelocityLimitsTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Imran", "Sheikh", "imran.sheikh." + n + "@example.com", null,
                 LocalDate.of(1985, 4, 11))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         accountId = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

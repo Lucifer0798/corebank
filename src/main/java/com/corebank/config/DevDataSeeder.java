@@ -54,7 +54,8 @@ public class DevDataSeeder {
 
             CustomerResponse customer = customerService.create(new CreateCustomerRequest(
                     "Asha", "Menon", ASHA_EMAIL, "+919876543210", LocalDate.of(1995, 4, 17)));
-            customerService.updateKyc(customer.id(), KycStatus.VERIFIED);
+            customerService.updateKyc(customer.id(), KycStatus.VERIFIED, "Demo customer",
+                    com.corebank.customer.domain.KycDecider.system("dev-data-seeder"));
             customerService.linkIdentity(customer.id(), ASHA_KEYCLOAK_SUBJECT);
 
             AccountResponse savings = accountService.open(new OpenAccountRequest(

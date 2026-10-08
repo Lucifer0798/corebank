@@ -60,7 +60,7 @@ class CurrencyAwareLimitsTest {
         UUID customerId = customerService.create(new CreateCustomerRequest(
                 "Reza", "Ahmadi", "reza.ahmadi." + unique + "@example.com", null,
                 LocalDate.of(1986, 3, 9))).id();
-        customerService.updateKyc(customerId, KycStatus.VERIFIED);
+        customerService.updateKyc(customerId, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
 
         UUID rupeeAccount = accountService.open(new OpenAccountRequest(
                 customerId, AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id();

@@ -57,7 +57,8 @@ class CustomerServiceTest {
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(TODAY.atStartOfDay(ZoneOffset.UTC).toInstant(), ZoneOffset.UTC);
-        customerService = new CustomerService(customers, sequences, clock, eventPublisher);
+        customerService = new CustomerService(customers, sequences, clock, eventPublisher,
+                org.mockito.Mockito.mock(com.corebank.customer.repository.KycDecisionRepository.class));
     }
 
     private static CreateCustomerRequest bornOn(LocalDate dateOfBirth) {

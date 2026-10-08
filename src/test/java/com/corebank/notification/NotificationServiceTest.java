@@ -115,7 +115,7 @@ class NotificationServiceTest {
         UUID id = customerService.create(new CreateCustomerRequest(name, "Rao",
                 name.toLowerCase() + ".rao." + n + "." + UUID.randomUUID() + "@example.com", null,
                 LocalDate.of(1990, 1, 1))).id();
-        customerService.updateKyc(id, KycStatus.VERIFIED);
+        customerService.updateKyc(id, KycStatus.VERIFIED, "Test fixture", com.corebank.config.TestDeciders.STAFF);
         return id;
     }
 

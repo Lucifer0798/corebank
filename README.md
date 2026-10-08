@@ -560,6 +560,28 @@ of them refuse with `CUSTOMER_NOT_VERIFIED`. The rule lives in one place, `Accou
   reason shown is the generic "could not be processed", because the instruction is visible to the
   payee as well and the payer's KYC status is not theirs to learn.
 
+**Every KYC decision is kept** in `kyc_decision`, with the status it moved from and to, who made
+it and why. Before this, a decision overwrote the customer's status and left no other trace. A
+customer asking why their money was blocked, or an auditor asking who rejected them, got no
+answer.
+
+- **Who decided comes from the caller's token**: its `sub` claim and username. The request body
+  has no field for it, so there is nothing to claim to be someone else. A non-human decider, such
+  as the dev-data seeder, is named `system:<process>`.
+- **A reason is required for anything but VERIFIED**, because that is the decision that stops
+  money leaving the customer's accounts. Whitespace doesn't count. `ck_kyc_decision_reason` backs
+  the rule up in the schema.
+- **It is append-only.** The history row is written in the same transaction as the status change.
+  The entity is immutable, and the repository extends Spring Data's bare `Repository`, so no delete
+  or update method exists. A test fails if one is ever declared, or if the repository moves to
+  `CrudRepository`.
+- **History starts when this table does.** Earlier decisions were never recorded and cannot be
+  reconstructed, and the customer page says so where the history would be.
+
+The customer page's KYC control used to appear only while a customer was PENDING, so a verified
+customer could never be sent back for review or rejected from the UI. It is now a decision form
+available to admins in every state, with the history underneath it for all staff.
+
 ### Closing an account
 
 Closing used to check only for a zero balance, which is not enough. Two things could still be
@@ -974,7 +996,8 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/customers` | TELLER, ADMIN | List customers |
 | `GET` | `/api/v1/customers/{id}` | TELLER, ADMIN | Fetch one customer |
 | `GET` | `/api/v1/customers/me` | CUSTOMER | Resolve the caller's own customer record |
-| `PATCH` | `/api/v1/customers/{id}/kyc` | ADMIN | Record a KYC decision |
+| `PATCH` | `/api/v1/customers/{id}/kyc` | ADMIN | Record a KYC decision: `kycStatus`, and a `reason` for anything but VERIFIED |
+| `GET` | `/api/v1/customers/{id}/kyc-decisions` | TELLER, ADMIN | Every KYC decision, who made it and why, newest first |
 | `GET` | `/api/v1/customers/me/notifications` | CUSTOMER | What the caller has been told, newest first |
 | `GET` | `/api/v1/customers/{id}/notifications` | TELLER, ADMIN | What a customer has been told, newest first |
 | `PATCH` | `/api/v1/customers/{id}/identity` | TELLER, ADMIN | Link a Keycloak identity to this customer |
@@ -1050,6 +1073,7 @@ as REST, passed as `authorization` metadata.
 | `DAILY_LIMIT_EXCEEDED` | 422 | The account's daily debit allowance is spent; the message says how much remains |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
+| `KYC_REASON_REQUIRED` | 422 | A KYC decision other than VERIFIED was made without saying why |
 | `CUSTOMER_NOT_VERIFIED` | 422 | Money cannot leave this account: its owner's KYC is no longer verified. Payments in still arrive |
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
 | `SAME_ACCOUNT_TRANSFER` | 422 | Source and destination are the same account |
