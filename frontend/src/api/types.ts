@@ -95,6 +95,8 @@ export interface Transaction {
   /** Set only on a REVERSAL: the reference of the posting it undoes. */
   reversalOf: string | null;
   legs: TransactionLeg[];
+  /** Who made it: a member of staff, or `system:<job>`. Null on postings from before this was recorded. */
+  initiatedBy: { subject: string; name: string | null } | null;
 }
 
 export type ScheduleFrequency = "ONCE" | "DAILY" | "WEEKLY" | "MONTHLY";

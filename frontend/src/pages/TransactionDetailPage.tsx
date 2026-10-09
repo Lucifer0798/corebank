@@ -1,4 +1,5 @@
 import { type FormEvent } from "react";
+import { postedBy } from "../attribution";
 import { Link, useParams } from "react-router-dom";
 import { useAuth } from "react-oidc-context";
 import { useReverseTransaction, useTransaction } from "../api/hooks";
@@ -35,6 +36,10 @@ export function TransactionDetailPage() {
           <div className="stat">
             <div className="stat__label">Amount</div>
             <div className="stat__value">{formatAmount(transaction.amount, transaction.currency)}</div>
+          </div>
+          <div className="stat">
+            <div className="stat__label">Posted by</div>
+            <div>{postedBy(transaction)}</div>
           </div>
         </div>
         {transaction.description && (

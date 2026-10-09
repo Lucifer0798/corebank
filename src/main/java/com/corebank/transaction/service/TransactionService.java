@@ -4,6 +4,8 @@ import com.corebank.account.domain.Account;
 import com.corebank.account.domain.EntryDirection;
 import com.corebank.account.service.AccountService;
 import com.corebank.common.Money;
+import com.corebank.common.security.Actor;
+import com.corebank.common.security.Actors;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.common.exception.ResourceNotFoundException;
 import com.corebank.fx.domain.FxRate;
@@ -305,6 +307,12 @@ public class TransactionService {
 
     private TransactionResponse post(BankTransaction transaction) {
         transaction.assertBalanced();
+        // Attributed here, on the one road every posting takes, so no path can post without saying
+        // who: a teller's deposit, an admin's reversal, a job's interest. Refuses when there is
+        // nobody to attribute it to -- see Actors.
+        Actor actor = Actors.current();
+        transaction.setInitiatedBySubject(actor.subject());
+        transaction.setInitiatedByName(actor.name());
         BankTransaction saved = transactions.save(transaction);
         // The cached account detail (AccountService.get) is now stale for every account this
         // posting touched; the short TTL is a safety net, not the primary freshness mechanism.

@@ -1,5 +1,7 @@
 package com.corebank.schedule;
 
+import com.corebank.common.security.Actor;
+import com.corebank.common.security.Actors;
 import com.corebank.schedule.service.ScheduledTransferService;
 import com.corebank.schedule.service.ScheduledTransferService.DueOccurrence;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,6 +50,13 @@ public class ScheduledTransferRunner {
 
     @Scheduled(fixedDelayString = "${corebank.scheduled-transfers.poll-interval:60s}")
     public void run() {
+        // No request stands behind a standing order's occurrence, so the runner says who it is.
+        Actors.runAs(ACTOR, this::runDue);
+    }
+
+    static final Actor ACTOR = Actor.system("scheduled-transfer-runner");
+
+    private void runDue() {
         LocalDate today = LocalDate.now(clock);
         for (UUID id : service.findDue(today)) {
             try {

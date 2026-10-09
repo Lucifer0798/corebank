@@ -45,6 +45,7 @@ function transaction(overrides: Partial<Transaction> = {}): Transaction {
     postedAt: "2026-04-17T09:30:00Z",
     reversalOf: null,
     legs: [],
+    initiatedBy: null,
     ...overrides,
   };
 }

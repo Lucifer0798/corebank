@@ -1,5 +1,7 @@
 package com.corebank.account.service;
 
+import com.corebank.common.security.Actor;
+import com.corebank.common.security.Actors;
 import java.time.LocalDate;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -35,6 +37,13 @@ public class InterestRunner {
 
     @Scheduled(fixedDelayString = "${corebank.interest.accrual-interval:1h}")
     public void run() {
+        // Capitalisation posts, and no request stands behind it, so the runner says who it is.
+        Actors.runAs(ACTOR, this::accrueAndCapitalise);
+    }
+
+    static final Actor ACTOR = Actor.system("interest-runner");
+
+    private void accrueAndCapitalise() {
         LocalDate today = interestService.today();
 
         for (UUID id : interestService.findAccountsToAccrue(today)) {

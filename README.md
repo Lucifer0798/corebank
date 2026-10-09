@@ -675,6 +675,34 @@ balance. The stable error code is now stored beside the message (V15), and every
 reason derived from it: "There was not enough money in the account (750.00 INR was due)." The
 original message stays in the database and the log, where it belongs.
 
+### Who made a posting
+
+Every posting records who made it, in `initiated_by_subject` and `initiated_by_name` (V17). Nothing
+used to. Which teller took a cash deposit or paid out a withdrawal is what a till is reconciled
+against, and the first question when cash is disputed. A reversal kept its reason but not the
+admin who unwound the money.
+
+- **Set in one place**, the single posting path every deposit, withdrawal, transfer, reversal,
+  capture and system posting takes. No path can post without saying who.
+- **A person is identified by their token:** its `sub` claim and username. The actor is read from
+  the request's security context, not passed down through every posting method. Threading an
+  actor parameter through would touch every caller and could be filled in wrongly just as easily.
+- **Jobs name themselves** with `Actors.runAs`: the standing-order runner, the interest runner and
+  the dev seeder are recorded as `system:<job>`. A job's identity takes precedence over any token
+  on the thread, because nobody signed in made a standing order's payment.
+- **A posting with nobody behind it is refused**, not recorded as unknown. In production every
+  posting comes from an authenticated request or a declared job, so anything else is a bug, and
+  an attribution that can quietly say "unknown" is not one anybody can rely on.
+- **Tests attribute to a named test actor** through a fallback that only tests set, via a
+  `TestExecutionListener`. A default token in the security context was tried first, but it leaked
+  into MockMvc and made requests sent without a token authenticated; a test of anonymous access
+  caught it. A test fails if production code ever sets the fallback.
+- **Postings from before V17 show as not recorded.** They cannot be attributed after the fact.
+
+The transaction page shows it as "Posted by", and a job reads as one ("System:
+interest-runner"). Customers never see it: the transaction endpoint is staff-only, and the
+statement lines a customer reads do not carry it.
+
 ### Idempotency
 
 `Idempotency-Key` is required on deposits, withdrawals and transfers.
@@ -1023,7 +1051,7 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/scheduled-transfers/{id}/resume` | TELLER, ADMIN | Restart a suspended one from its next occurrence |
 | `POST` | `/api/v1/transactions/{reference}/reversal` | ADMIN | Reverse a posting — needs `Idempotency-Key` and a `reason` |
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
-| `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction and both legs |
+| `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction, its legs, and who made it (`initiatedBy`) |
 | `GET` | `/api/v1/fx/quote` | any | What an amount converts to: `from`, `to`, `amount` |
 | `GET` | `/api/v1/fx/position` | ADMIN | The bank's own currency exposure, valued into the reporting currency |
 | `POST` | `/api/v1/fx/revalue` | ADMIN | Mark the book to market, posting the change since the last close |

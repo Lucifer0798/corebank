@@ -47,7 +47,8 @@ public class DevDataSeeder {
                                                  CustomerService customerService,
                                                  AccountService accountService,
                                                  TransactionService transactionService) {
-        return args -> {
+        return args -> com.corebank.common.security.Actors.runAs(
+                com.corebank.common.security.Actor.system("dev-data-seeder"), () -> {
             if (customers.existsByEmailIgnoreCase(ASHA_EMAIL)) {
                 return;
             }
@@ -76,6 +77,6 @@ public class DevDataSeeder {
                       savings account {} funded with 25000.00
                       current account {} with a 5000.00 overdraft
                     """, savings.accountNumber(), current.accountNumber());
-        };
+        });
     }
 }
