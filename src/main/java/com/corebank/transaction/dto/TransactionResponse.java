@@ -31,7 +31,23 @@ public record TransactionResponse(
                 + "and in which currency. All three are null on a single-currency posting.")
         Fx fx,
 
-        List<Leg> legs) {
+        List<Leg> legs,
+
+        @Schema(description = "Who made this posting: a member of staff, or a system job. Null on postings "
+                + "made before this was recorded.")
+        InitiatedBy initiatedBy) {
+
+    @Schema(description = "Who made a posting")
+    public record InitiatedBy(
+            @Schema(description = "The token's sub claim, or system:<job>") String subject,
+            @Schema(description = "The username at the time, or the job's name") String name) {
+
+        static InitiatedBy from(BankTransaction transaction) {
+            return transaction.getInitiatedBySubject() == null
+                    ? null
+                    : new InitiatedBy(transaction.getInitiatedBySubject(), transaction.getInitiatedByName());
+        }
+    }
 
     @Schema(description = "One side of the double-entry posting")
     public record Leg(
@@ -76,6 +92,7 @@ public record TransactionResponse(
                 transaction.getPostedAt(),
                 transaction.getReversalOf() == null ? null : transaction.getReversalOf().getReference(),
                 Fx.from(transaction),
-                transaction.getEntries().stream().map(Leg::from).toList());
+                transaction.getEntries().stream().map(Leg::from).toList(),
+                InitiatedBy.from(transaction));
     }
 }

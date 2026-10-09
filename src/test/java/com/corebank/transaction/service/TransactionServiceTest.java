@@ -94,6 +94,17 @@ class TransactionServiceTest {
     private Account customer;
     private Account cash;
 
+    // A plain Mockito test, so TestActorListener does not run: the postings here need an actor set by hand.
+    @BeforeEach
+    void attributePostings() {
+        com.corebank.common.security.Actors.setTestFallback(com.corebank.config.TestActorListener.STAFF);
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearAttribution() {
+        com.corebank.common.security.Actors.setTestFallback(null);
+    }
+
     @BeforeEach
     void setUp() {
         customer = customerAccount(ACCOUNT_ID, "100100000001", "1000.00", "0.00");

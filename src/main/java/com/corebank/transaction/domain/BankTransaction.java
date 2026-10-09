@@ -69,6 +69,13 @@ public class BankTransaction {
     @Column(name = "idempotency_key", updatable = false, length = 80)
     private String idempotencyKey;
 
+    /** Who made this posting -- see {@code Actors}. Null only on postings from before V17. */
+    @Column(name = "initiated_by_subject", updatable = false, length = 64)
+    private String initiatedBySubject;
+
+    @Column(name = "initiated_by_name", updatable = false, length = 255)
+    private String initiatedByName;
+
     @Column(name = "posted_at", nullable = false)
     private Instant postedAt;
 
