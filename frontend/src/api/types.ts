@@ -21,6 +21,18 @@ export interface PagedResponse<T> {
   last: boolean;
 }
 
+/** Mirrors com.corebank.account.dto.AccountStatusChangeResponse. History starts when it was introduced. */
+export interface AccountStatusChange {
+  id: string;
+  fromStatus: AccountStatus;
+  toStatus: AccountStatus;
+  changedBySubject: string;
+  changedByName: string | null;
+  /** Always present on a freeze or a closure. */
+  reason: string | null;
+  changedAt: string;
+}
+
 /** Mirrors com.corebank.customer.dto.KycDecisionResponse. History starts when it was introduced. */
 export interface KycDecision {
   id: string;

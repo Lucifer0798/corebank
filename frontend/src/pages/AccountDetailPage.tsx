@@ -6,14 +6,11 @@ import {
   useBalance,
   useCancelScheduledTransfer,
   useResumeScheduledTransfer,
-  useCloseAccount,
   useCreateScheduledTransfer,
   useDeposit,
-  useFreezeAccount,
   useScheduledTransfers,
   useStatement,
   useTransfer,
-  useUnfreezeAccount,
   useWithdraw,
   type AmountInput,
 } from "../api/hooks";
@@ -21,22 +18,22 @@ import type { Account, ScheduleFrequency } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { StatusPill } from "../components/StatusPill";
 import { formatAmount, formatCalendarDate, formatDateTime } from "../format";
-import { isStaff, rolesFromAccessToken } from "../auth/roles";
+import { isAdmin, isStaff, rolesFromAccessToken } from "../auth/roles";
+import { AccountStatusCard } from "../components/AccountStatusCard";
 import { canCancel, canResume, directionFor, scheduleAttention } from "../schedule";
 
 export function AccountDetailPage() {
   const { accountId } = useParams<{ accountId: string }>();
   const auth = useAuth();
-  const staff = isStaff(rolesFromAccessToken(auth.user?.access_token));
+  const roles = rolesFromAccessToken(auth.user?.access_token);
+  const staff = isStaff(roles);
+  const admin = isAdmin(roles);
 
   const { data: account, isLoading, error } = useAccount(accountId);
   const { data: balance } = useBalance(accountId);
   const [page, setPage] = useState(0);
   const { data: statement } = useStatement(accountId, page);
 
-  const freeze = useFreezeAccount();
-  const unfreeze = useUnfreezeAccount();
-  const close = useCloseAccount();
 
   if (isLoading) return <p className="muted">Loading&hellip;</p>;
   if (error || !account) return <ErrorBanner error={error} />;
@@ -92,24 +89,9 @@ export function AccountDetailPage() {
           )}
         </div>
 
-        {staff && account.status !== "CLOSED" && (
-          <div className="btn-row" style={{ marginTop: "1rem" }}>
-            <ErrorBanner error={freeze.error || unfreeze.error || close.error} />
-            {account.status === "ACTIVE" ? (
-              <button className="btn btn--secondary" onClick={() => freeze.mutate(account.id)} disabled={freeze.isPending}>
-                Freeze
-              </button>
-            ) : (
-              <button className="btn btn--secondary" onClick={() => unfreeze.mutate(account.id)} disabled={unfreeze.isPending}>
-                Unfreeze
-              </button>
-            )}
-            <button className="btn btn--danger" onClick={() => close.mutate(account.id)} disabled={close.isPending}>
-              Close account
-            </button>
-          </div>
-        )}
       </div>
+
+      {staff && <AccountStatusCard account={account} admin={admin} />}
 
       {staff && account.status !== "CLOSED" && <MoneyMovementCard accountId={account.id} />}
 

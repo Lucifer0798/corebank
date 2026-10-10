@@ -287,7 +287,7 @@ class HoldServiceTest {
     @Test
     @DisplayName("a frozen account takes no new holds")
     void aFrozenAccountRefusesAHold() {
-        accountService.changeStatus(accountId, AccountStatus.FROZEN);
+        accountService.changeStatus(accountId, AccountStatus.FROZEN, "Test fixture");
 
         assertThatThrownBy(() -> place("100.00"))
                 .isInstanceOf(BusinessRuleException.class)
@@ -304,7 +304,7 @@ class HoldServiceTest {
         // honour an authorisation already given, so if that is ever wanted, this is the test that
         // should change, deliberately.
         String reference = place("100.00").reference();
-        accountService.changeStatus(accountId, AccountStatus.FROZEN);
+        accountService.changeStatus(accountId, AccountStatus.FROZEN, "Test fixture");
 
         assertThatThrownBy(() -> holdService.capture(reference, new CaptureHoldRequest(null)))
                 .isInstanceOf(BusinessRuleException.class)

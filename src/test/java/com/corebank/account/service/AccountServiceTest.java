@@ -60,7 +60,10 @@ class AccountServiceTest {
 
     @BeforeEach
     void setUp() {
-        accountService = new AccountService(accounts, customerService, sequences, TestProperties.defaults(), java.util.List.of());
+        accountService = new AccountService(accounts, customerService, sequences, TestProperties.defaults(), java.util.List.of(),
+                org.mockito.Mockito.mock(com.corebank.account.repository.AccountStatusChangeRepository.class));
+        // A plain Mockito test, so TestActorListener does not run; status changes need an actor.
+        com.corebank.common.security.Actors.setTestFallback(com.corebank.config.TestActorListener.STAFF);
 
         customer = new Customer();
         customer.setId(UUID.randomUUID());
@@ -78,6 +81,11 @@ class AccountServiceTest {
      * than in setUp so Mockito's strict stubbing stays on: a rejection test that never gets as
      * far as saving should fail loudly if it was handed a save stub it didn't use.
      */
+    @org.junit.jupiter.api.AfterEach
+    void clearAttribution() {
+        com.corebank.common.security.Actors.setTestFallback(null);
+    }
+
     private void stubEligibleCustomer() {
         when(customerService.require(any(UUID.class))).thenReturn(customer);
     }
@@ -135,7 +143,7 @@ class AccountServiceTest {
         UUID accountId = closed.getId();
         when(accounts.findByIdForUpdate(accountId)).thenReturn(java.util.Optional.of(closed));
 
-        assertThatThrownBy(() -> accountService.changeStatus(accountId, AccountStatus.ACTIVE))
+        assertThatThrownBy(() -> accountService.changeStatus(accountId, AccountStatus.ACTIVE, "Test fixture"))
                 .isInstanceOf(BusinessRuleException.class)
                 .hasMessageContaining("closed account cannot be reopened")
                 .extracting(ex -> ((BusinessRuleException) ex).getCode())
@@ -151,7 +159,7 @@ class AccountServiceTest {
         Account frozen = customerAccount(AccountStatus.FROZEN);
         when(accounts.findByIdForUpdate(frozen.getId())).thenReturn(java.util.Optional.of(frozen));
 
-        assertThat(accountService.changeStatus(frozen.getId(), AccountStatus.ACTIVE).status())
+        assertThat(accountService.changeStatus(frozen.getId(), AccountStatus.ACTIVE, "Test fixture").status())
                 .isEqualTo(AccountStatus.ACTIVE);
     }
 

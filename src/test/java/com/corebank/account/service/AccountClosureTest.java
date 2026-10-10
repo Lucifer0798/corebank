@@ -78,7 +78,7 @@ class AccountClosureTest {
     }
 
     private void close(UUID accountId) {
-        accountService.changeStatus(accountId, AccountStatus.CLOSED);
+        accountService.changeStatus(accountId, AccountStatus.CLOSED, "Test fixture");
     }
 
     private static String codeOf(Throwable ex) {
@@ -193,12 +193,16 @@ class AccountClosureTest {
         TransactionTemplate inTransaction = new TransactionTemplate(transactionManager);
         CountDownLatch closerHoldsTheLock = new CountDownLatch(1);
 
-        CompletableFuture<Void> closer = CompletableFuture.runAsync(() -> inTransaction.executeWithoutResult(status -> {
+        // Its own thread, so it says who it is: the test's actor is thread-local and does not follow it
+        // there, and without one the closure is refused -- which once made this test fail for the
+        // wrong reason, the instruction succeeding only because the closure never happened.
+        CompletableFuture<Void> closer = CompletableFuture.runAsync(() -> com.corebank.common.security.Actors.runAs(
+                com.corebank.config.TestActorListener.STAFF, () -> inTransaction.executeWithoutResult(status -> {
             accountService.requireForUpdate(payee);
             closerHoldsTheLock.countDown();
             pause(300);
             close(payee);
-        }));
+        })));
         assertThat(closerHoldsTheLock.await(5, TimeUnit.SECONDS)).isTrue();
 
         assertThatThrownBy(() -> instruction(payer, payee, ScheduleFrequency.MONTHLY))
