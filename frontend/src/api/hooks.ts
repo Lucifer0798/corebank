@@ -3,6 +3,7 @@ import { useAuth } from "react-oidc-context";
 import { apiFetch, newIdempotencyKey } from "./client";
 import type {
   Account,
+  AccountStatusChange,
   Balance,
   Customer,
   CustomerSearchHit,
@@ -177,21 +178,39 @@ export function useOpenAccount() {
   });
 }
 
-function useAccountStatusMutation(action: "freeze" | "unfreeze" | "close") {
+export type AccountStatusAction = "freeze" | "unfreeze" | "close";
+
+export interface AccountStatusChangeInput {
+  accountId: string;
+  action: AccountStatusAction;
+  /** Required by the backend to freeze or close; kept with who did it. */
+  reason?: string;
+}
+
+/** Who did it is taken from the caller's token on the backend, so it is not something this sends. */
+export function useChangeAccountStatus() {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (accountId: string) => api.post<Account>(`/accounts/${accountId}/${action}`),
+    mutationFn: ({ accountId, action, reason }: AccountStatusChangeInput) =>
+      api.post<Account>(`/accounts/${accountId}/${action}`, { reason }),
     onSuccess: (account) => {
       queryClient.setQueryData(["account", account.id], account);
       queryClient.invalidateQueries({ queryKey: ["accounts", "byCustomer", account.customerId] });
+      queryClient.invalidateQueries({ queryKey: ["accountStatusChanges", account.id] });
     },
   });
 }
 
-export const useFreezeAccount = () => useAccountStatusMutation("freeze");
-export const useUnfreezeAccount = () => useAccountStatusMutation("unfreeze");
-export const useCloseAccount = () => useAccountStatusMutation("close");
+/** Every freeze, unfreeze and closure of an account, newest first. Staff only. */
+export function useAccountStatusChanges(accountId: string, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["accountStatusChanges", accountId, page],
+    queryFn: () =>
+      api.get<PagedResponse<AccountStatusChange>>(`/accounts/${accountId}/status-changes`, { page, size: 10 }),
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // Transactions

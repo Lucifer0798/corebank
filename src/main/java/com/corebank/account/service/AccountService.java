@@ -3,15 +3,19 @@ package com.corebank.account.service;
 import com.corebank.account.domain.Account;
 import com.corebank.account.domain.AccountClass;
 import com.corebank.account.domain.AccountStatus;
+import com.corebank.account.domain.AccountStatusChange;
 import com.corebank.account.domain.AccountType;
 import com.corebank.account.domain.EntryDirection;
 import com.corebank.account.dto.AccountResponse;
+import com.corebank.account.dto.AccountStatusChangeResponse;
 import com.corebank.account.dto.OpenAccountRequest;
 import com.corebank.account.repository.AccountRepository;
+import com.corebank.account.repository.AccountStatusChangeRepository;
 import com.corebank.common.Money;
 import com.corebank.common.SequenceNumberGenerator;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.common.exception.ResourceNotFoundException;
+import com.corebank.common.security.Actors;
 import com.corebank.config.CacheConfig;
 import com.corebank.config.CoreBankProperties;
 import com.corebank.customer.domain.Customer;
@@ -39,13 +43,16 @@ public class AccountService {
     private final SequenceNumberGenerator sequences;
     private final CoreBankProperties properties;
     private final List<AccountClosureCheck> closureChecks;
+    private final AccountStatusChangeRepository statusChanges;
 
     public AccountService(AccountRepository accounts,
                           CustomerService customerService,
                           SequenceNumberGenerator sequences,
                           CoreBankProperties properties,
-                          List<AccountClosureCheck> closureChecks) {
+                          List<AccountClosureCheck> closureChecks,
+                          AccountStatusChangeRepository statusChanges) {
         this.accounts = accounts;
+        this.statusChanges = statusChanges;
         this.customerService = customerService;
         this.sequences = sequences;
         this.properties = properties;
@@ -131,7 +138,15 @@ public class AccountService {
 
     @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
     @Transactional
-    public AccountResponse changeStatus(UUID accountId, AccountStatus target) {
+    /**
+     * Freezes, unfreezes or closes an account, and records who did it and why in the same transaction.
+     *
+     * <p>Freezing and closing need a reason: a freeze stops all money movement, in as well as out, and
+     * a closure is final, so both are decisions somebody will be asked about. Returning an account to
+     * service may give one. A change to the status it already has is refused rather than recorded --
+     * a history full of non-events hides the ones that mattered.
+     */
+    public AccountResponse changeStatus(UUID accountId, AccountStatus target, String reason) {
         // Locked, so that what the closure checks below find is still true at commit: placing a
         // hold, or setting up or resuming a standing instruction, takes this same row lock first.
         Account account = requireForUpdate(accountId);
@@ -141,6 +156,15 @@ public class AccountService {
         if (account.getStatus() == AccountStatus.CLOSED) {
             throw new BusinessRuleException("ACCOUNT_CLOSED", "A closed account cannot be reopened");
         }
+        if (account.getStatus() == target) {
+            throw new BusinessRuleException("STATUS_UNCHANGED",
+                    "Account " + account.getAccountNumber() + " is already " + target.name().toLowerCase());
+        }
+        String statedReason = reason == null || reason.isBlank() ? null : reason.strip();
+        if (target != AccountStatus.ACTIVE && statedReason == null) {
+            throw new BusinessRuleException("STATUS_REASON_REQUIRED",
+                    "Say why: freezing or closing an account is kept with the reason it was done");
+        }
         if (target == AccountStatus.CLOSED && Money.isPositive(account.getBalance().abs())) {
             throw new BusinessRuleException("BALANCE_NOT_ZERO",
                     "Account " + account.getAccountNumber() + " must be emptied before it is closed");
@@ -149,8 +173,11 @@ public class AccountService {
             assertNothingOutstanding(account);
         }
 
+        Instant now = Instant.now();
+        statusChanges.save(new AccountStatusChange(account.getId(), account.getStatus(), target,
+                Actors.current(), statedReason, now));
         account.setStatus(target);
-        account.setClosedAt(target == AccountStatus.CLOSED ? Instant.now() : null);
+        account.setClosedAt(target == AccountStatus.CLOSED ? now : null);
         return AccountResponse.from(account);
     }
 
@@ -175,6 +202,14 @@ public class AccountService {
     @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
     public void evictCache(UUID accountId) {
         // Body intentionally empty; @CacheEvict does the work.
+    }
+
+    /** Every freeze, unfreeze and closure of this account, newest first. */
+    @Transactional(readOnly = true)
+    public Page<AccountStatusChangeResponse> statusHistory(UUID accountId, Pageable pageable) {
+        require(accountId);
+        return statusChanges.findByAccountIdOrderByChangedAtDesc(accountId, pageable)
+                .map(AccountStatusChangeResponse::from);
     }
 
     @Transactional(readOnly = true)

@@ -407,7 +407,9 @@ class CoreBankApiIntegrationTest {
     @Order(21)
     @DisplayName("a frozen account rejects postings until it is unfrozen")
     void frozenAccountsRejectPostings() throws Exception {
-        mockMvc.perform(post("/api/v1/accounts/{id}/freeze", savingsId).with(teller()))
+        mockMvc.perform(post("/api/v1/accounts/{id}/freeze", savingsId).with(teller())
+                        .contentType(JSON).content("""
+                        {"reason":"Customer reported the card stolen"}"""))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("FROZEN"));
 
@@ -427,7 +429,10 @@ class CoreBankApiIntegrationTest {
     @Order(22)
     @DisplayName("an account holding money cannot be closed")
     void fundedAccountsCannotBeClosed() throws Exception {
-        mockMvc.perform(post("/api/v1/accounts/{id}/close", savingsId).with(admin()))
+        // With a reason, so that what this hits is the balance rule and not the missing reason.
+        mockMvc.perform(post("/api/v1/accounts/{id}/close", savingsId).with(admin())
+                        .contentType(JSON).content("""
+                        {"reason":"Customer moving abroad"}"""))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("BALANCE_NOT_ZERO"));
     }

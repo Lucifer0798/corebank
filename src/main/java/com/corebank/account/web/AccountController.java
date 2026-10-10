@@ -1,5 +1,7 @@
 package com.corebank.account.web;
 
+import com.corebank.account.dto.StatusChangeRequest;
+import com.corebank.account.dto.AccountStatusChangeResponse;
 import com.corebank.account.domain.AccountStatus;
 import com.corebank.account.dto.AccountResponse;
 import com.corebank.account.dto.BalanceResponse;
@@ -75,22 +77,46 @@ public class AccountController {
 
     @PostMapping("/accounts/{accountId}/freeze")
     @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
-    @Operation(summary = "Freeze an account", description = "A frozen account rejects every posting until it is unfrozen.")
-    public AccountResponse freeze(@PathVariable UUID accountId) {
-        return accountService.changeStatus(accountId, AccountStatus.FROZEN);
+    @Operation(summary = "Freeze an account",
+            description = "A frozen account rejects every posting until it is unfrozen. Needs a reason, which is "
+                    + "kept with who froze it.")
+    public AccountResponse freeze(@PathVariable UUID accountId,
+                                  @Valid @RequestBody(required = false) StatusChangeRequest request) {
+        return accountService.changeStatus(accountId, AccountStatus.FROZEN, reasonOf(request));
     }
 
     @PostMapping("/accounts/{accountId}/unfreeze")
     @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
-    @Operation(summary = "Return a frozen account to service")
-    public AccountResponse unfreeze(@PathVariable UUID accountId) {
-        return accountService.changeStatus(accountId, AccountStatus.ACTIVE);
+    @Operation(summary = "Return a frozen account to service", description = "A reason is optional.")
+    public AccountResponse unfreeze(@PathVariable UUID accountId,
+                                    @Valid @RequestBody(required = false) StatusChangeRequest request) {
+        return accountService.changeStatus(accountId, AccountStatus.ACTIVE, reasonOf(request));
     }
 
     @PostMapping("/accounts/{accountId}/close")
     @PreAuthorize("hasRole('ADMIN')")
-    @Operation(summary = "Close an account", description = "Refused unless the balance is exactly zero. Closing is final.")
-    public AccountResponse close(@PathVariable UUID accountId) {
-        return accountService.changeStatus(accountId, AccountStatus.CLOSED);
+    @Operation(summary = "Close an account",
+            description = "Refused unless the balance is exactly zero and nothing is outstanding. Closing is final, "
+                    + "and needs a reason.")
+    public AccountResponse close(@PathVariable UUID accountId,
+                                 @Valid @RequestBody(required = false) StatusChangeRequest request) {
+        return accountService.changeStatus(accountId, AccountStatus.CLOSED, reasonOf(request));
+    }
+
+    @GetMapping("/accounts/{accountId}/status-changes")
+    @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
+    @Operation(summary = "Who froze, unfroze or closed this account, and why -- newest first",
+            description = "Staff only: the reason for a freeze can be a fraud report or a legal order. Starts when "
+                    + "this history was introduced; earlier changes were never recorded.")
+    public PagedResponse<AccountStatusChangeResponse> statusChanges(
+            @PathVariable UUID accountId,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return PagedResponse.of(accountService.statusHistory(accountId, PageRequest.of(page, size)));
+    }
+
+    /** The body is optional so that unfreezing needs none; a missing one is the same as no reason. */
+    private static String reasonOf(StatusChangeRequest request) {
+        return request == null ? null : request.reason();
     }
 }

@@ -368,7 +368,7 @@ class ScheduledTransferRunnerTest {
     @DisplayName("an instruction cannot be resumed into an account that can no longer take part")
     void resumeRechecksTheAccounts() {
         ScheduledTransferResponse created = suspended();
-        accountService.changeStatus(destination, AccountStatus.FROZEN);
+        accountService.changeStatus(destination, AccountStatus.FROZEN, "Test fixture");
 
         assertThatThrownBy(() -> scheduledTransfers.resume(created.id()))
                 .isInstanceOf(BusinessRuleException.class)

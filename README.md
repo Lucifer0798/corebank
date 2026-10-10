@@ -582,6 +582,30 @@ The customer page's KYC control used to appear only while a customer was PENDING
 customer could never be sent back for review or rejected from the UI. It is now a decision form
 available to admins in every state, with the history underneath it for all staff.
 
+### Freezing and closing: who and why
+
+Every freeze, unfreeze and closure is kept in `account_status_change` (V18), with the status
+before and after, who made the change, the reason and the time. None of it used to be recorded.
+The account row was overwritten in place: a closure kept `closed_at`, and a freeze kept nothing,
+not even when it happened. A freeze stops all money movement, in as well as out, and usually
+follows a fraud report or a legal order, so "who froze this, and on what grounds" needs an answer.
+
+- **Who made the change comes from `Actors.current()`**, the same mechanism that attributes
+  postings, so a freeze is attributed exactly as a deposit is.
+- **Freezing and closing need a reason** (`STATUS_REASON_REQUIRED`); unfreezing doesn't.
+  `ck_status_change_reason` backs this up in the schema. The three endpoints take an optional
+  `{"reason": …}` body. This is a breaking change for any client that froze or closed without one.
+- **A change to the status the account already has is refused** (`STATUS_UNCHANGED`) rather than
+  recorded. A history full of non-events hides the changes that mattered.
+- **A refused change records nothing.** The row is written only after every check passes, so a
+  closure turned away for its balance never appears to have happened.
+- **Append-only by construction, as the KYC history is**, and **staff only**: the reason for a
+  freeze is not the account holder's to read. History starts here.
+
+The account page's freeze and close buttons became an `AccountStatusCard`: a reason field,
+required for freeze and close, with the history underneath. Close is now offered only to admins.
+Before, tellers saw the button too, though the endpoint is admin-only and refused them with a 403.
+
 ### Closing an account
 
 Closing used to check only for a zero balance, which is not enough. Two things could still be
@@ -1033,9 +1057,10 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/accounts/{id}` | owner, staff | Fetch one account (cached) |
 | `GET` | `/api/v1/accounts/{id}/balance` | owner, staff | Current and available balance |
 | `GET` | `/api/v1/customers/{id}/accounts` | owner, staff | Accounts a customer holds |
-| `POST` | `/api/v1/accounts/{id}/freeze` | TELLER, ADMIN | Freeze an account |
-| `POST` | `/api/v1/accounts/{id}/unfreeze` | TELLER, ADMIN | Return it to service |
-| `POST` | `/api/v1/accounts/{id}/close` | ADMIN | Close an account: zero balance, no active holds, no live or suspended standing instructions |
+| `POST` | `/api/v1/accounts/{id}/freeze` | TELLER, ADMIN | Freeze an account; needs a `reason` |
+| `POST` | `/api/v1/accounts/{id}/unfreeze` | TELLER, ADMIN | Return it to service; `reason` optional |
+| `POST` | `/api/v1/accounts/{id}/close` | ADMIN | Close an account: zero balance, no active holds, no live or suspended standing instructions, and a `reason` |
+| `GET` | `/api/v1/accounts/{id}/status-changes` | TELLER, ADMIN | Every freeze, unfreeze and closure, who made it and why, newest first |
 | `POST` | `/api/v1/accounts/{id}/deposits` | TELLER, ADMIN | Deposit — needs `Idempotency-Key` |
 | `POST` | `/api/v1/accounts/{id}/withdrawals` | TELLER, ADMIN | Withdraw — needs `Idempotency-Key` |
 | `POST` | `/api/v1/transfers` | TELLER, ADMIN | Transfer — needs `Idempotency-Key` |
@@ -1101,6 +1126,8 @@ as REST, passed as `authorization` metadata.
 | `DAILY_LIMIT_EXCEEDED` | 422 | The account's daily debit allowance is spent; the message says how much remains |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
+| `STATUS_REASON_REQUIRED` | 422 | A freeze or closure was requested without saying why |
+| `STATUS_UNCHANGED` | 422 | The account already has the status requested |
 | `KYC_REASON_REQUIRED` | 422 | A KYC decision other than VERIFIED was made without saying why |
 | `CUSTOMER_NOT_VERIFIED` | 422 | Money cannot leave this account: its owner's KYC is no longer verified. Payments in still arrive |
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
