@@ -145,8 +145,10 @@ class AccountStatusHistoryTest {
     @Test
     @DisplayName("a closure refused for another reason leaves no history behind")
     void aRefusedClosureRecordsNothing() throws Exception {
-        // The history row is written only once every check has passed; a closure turned away for the
-        // balance must not read, later, as though it happened.
+        // A closure turned away for its balance must not read, later, as though it happened. What
+        // guarantees it is that the history row shares the change's transaction, so the refusal rolls
+        // it back -- not where in the method it is written: a break that wrote it before the checks
+        // left this green. It would catch a history write that committed on its own.
         transactionService.deposit(accountId, new AmountRequest(new BigDecimal("10.00"), "INR", "Fund"),
                 "status-fund-" + UUID.randomUUID());
 

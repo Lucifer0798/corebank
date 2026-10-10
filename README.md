@@ -597,8 +597,11 @@ follows a fraud report or a legal order, so "who froze this, and on what grounds
   `{"reason": …}` body. This is a breaking change for any client that froze or closed without one.
 - **A change to the status the account already has is refused** (`STATUS_UNCHANGED`) rather than
   recorded. A history full of non-events hides the changes that mattered.
-- **A refused change records nothing.** The row is written only after every check passes, so a
-  closure turned away for its balance never appears to have happened.
+- **A refused change records nothing.** The history row is written in the same transaction as the
+  change, so a refusal (a closure turned away for its balance, say) rolls the row back with
+  everything else. It is that atomicity, not the order of the code, that guarantees it: a
+  deliberate break that wrote the row *before* the checks left the test green, because the
+  rollback removed it anyway.
 - **Append-only by construction, as the KYC history is**, and **staff only**: the reason for a
   freeze is not the account holder's to read. History starts here.
 
