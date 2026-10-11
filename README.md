@@ -582,6 +582,26 @@ The customer page's KYC control used to appear only while a customer was PENDING
 customer could never be sent back for review or rejected from the UI. It is now a decision form
 available to admins in every state, with the history underneath it for all staff.
 
+### Linking a sign-in identity
+
+Linking a Keycloak identity to a customer decides which login can read their accounts. A link
+could be **silently replaced**: a second link overwrote the first, so the customer's record
+pointed at a different login, which could then read their balances, statements and
+notifications. Meanwhile the customer's own login stopped resolving (`/me` said "not set up
+yet"), and nothing recorded who had done it. A throwaway probe confirmed this before anything
+changed. The frontend only offered linking to an unlinked customer, but the API never enforced
+that.
+
+- **Linking is now once only** (`CUSTOMER_ALREADY_LINKED`, 409). Any member of staff can make
+  the first link.
+- **Replacing a link is a separate, admin-only `PUT` with a required reason**, for a genuine case
+  such as a customer whose Keycloak account had to be recreated. A relink still cannot take a login
+  that belongs to another customer, and one to the identity already linked is refused.
+- **Every link and relink is kept** in `identity_link` (V19): the login linked, the one it
+  replaced, who did it (from `Actors`), the reason and the time. It is append-only like the other
+  histories, and `ck_identity_link_reason` backs up the reason rule. Staff can read it on the
+  customer page, where an admin also gets the relink form.
+
 ### Freezing and closing: who and why
 
 Every freeze, unfreeze and closure is kept in `account_status_change` (V18), with the status
@@ -787,14 +807,15 @@ token directly from Keycloak and presents it as a bearer token.
 | Role | May |
 | --- | --- |
 | `CUSTOMER` | Read their own accounts and statements |
-| `TELLER` | Onboard customers, open accounts, move money |
-| `ADMIN` | Everything, plus KYC decisions, closing accounts and linking identities |
+| `TELLER` | Onboard customers, open accounts, move money, link a customer's sign-in identity (once) |
+| `ADMIN` | Everything, plus KYC decisions, closing accounts and replacing a linked identity |
 
 A CUSTOMER token's ownership is resolved by looking up `customer.keycloak_subject` against the
 token's `sub` claim — the one claim Keycloak always issues and never lets drift out of sync with
 an application-managed attribute — rather than by trusting a customer id embedded in the token
-itself. Staff link a Keycloak identity to a customer via `PATCH /customers/{id}/identity`; a
-customer resolves their own record via `GET /customers/me`.
+itself. Staff link a Keycloak identity to a customer via `PATCH /customers/{id}/identity`, once;
+replacing it is an admin `PUT` with a reason (see Linking a sign-in identity). A customer resolves
+their own record via `GET /customers/me`.
 
 The `issuer-uri` and `jwk-set-uri` resource-server properties are both set deliberately: with
 only `issuer-uri`, Spring performs an eager discovery-document fetch at application startup,
@@ -1055,7 +1076,9 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/customers/{id}/kyc-decisions` | TELLER, ADMIN | Every KYC decision, who made it and why, newest first |
 | `GET` | `/api/v1/customers/me/notifications` | CUSTOMER | What the caller has been told, newest first |
 | `GET` | `/api/v1/customers/{id}/notifications` | TELLER, ADMIN | What a customer has been told, newest first |
-| `PATCH` | `/api/v1/customers/{id}/identity` | TELLER, ADMIN | Link a Keycloak identity to this customer |
+| `PATCH` | `/api/v1/customers/{id}/identity` | TELLER, ADMIN | Link a Keycloak identity to this customer; once only |
+| `PUT` | `/api/v1/customers/{id}/identity` | ADMIN | Replace the linked identity: `keycloakSubject` and a `reason` |
+| `GET` | `/api/v1/customers/{id}/identity-links` | TELLER, ADMIN | Every identity linked, what it replaced, who and why |
 | `POST` | `/api/v1/accounts` | TELLER, ADMIN | Open an account |
 | `GET` | `/api/v1/accounts/{id}` | owner, staff | Fetch one account (cached) |
 | `GET` | `/api/v1/accounts/{id}/balance` | owner, staff | Current and available balance |
@@ -1122,6 +1145,10 @@ as REST, passed as `authorization` metadata.
 | `CONCURRENT_MODIFICATION` | 409 | Optimistic lock lost; retry |
 | `EMAIL_TAKEN` | 409 | A customer with that email already exists |
 | `IDENTITY_ALREADY_LINKED` | 409 | That Keycloak identity is linked to a different customer |
+| `CUSTOMER_ALREADY_LINKED` | 409 | This customer already has a linked identity; replacing it is an admin relink |
+| `CUSTOMER_NOT_LINKED` | 422 | A relink was asked for a customer with nothing linked |
+| `IDENTITY_UNCHANGED` | 422 | A relink to the identity already linked |
+| `RELINK_REASON_REQUIRED` | 422 | A relink was asked without saying why |
 | `ALREADY_REVERSED` | 409 | That transaction has already been reversed |
 | `HOLD_NOT_ACTIVE` | 409 | That hold was already captured, released or expired |
 | `INSUFFICIENT_FUNDS` | 422 | Available balance, including overdraft, is too low |
