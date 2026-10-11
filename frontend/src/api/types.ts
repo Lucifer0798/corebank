@@ -21,6 +21,19 @@ export interface PagedResponse<T> {
   last: boolean;
 }
 
+/** Mirrors com.corebank.customer.dto.IdentityLinkResponse. History starts when it was introduced. */
+export interface IdentityLink {
+  id: string;
+  /** The login this replaced; null on a first link. */
+  previousSubject: string | null;
+  newSubject: string;
+  linkedBySubject: string;
+  linkedByName: string | null;
+  /** Always present on a relink. */
+  reason: string | null;
+  linkedAt: string;
+}
+
 /** Mirrors com.corebank.account.dto.AccountStatusChangeResponse. History starts when it was introduced. */
 export interface AccountStatusChange {
   id: string;

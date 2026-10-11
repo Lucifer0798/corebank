@@ -7,6 +7,7 @@ import type {
   Balance,
   Customer,
   CustomerSearchHit,
+  IdentityLink,
   KycDecision,
   KycStatus,
   Notification,
@@ -25,6 +26,7 @@ function useApi() {
   const auth = useAuth();
   const token = auth.user?.access_token;
   return {
+    token,
     get: <T,>(path: string, params?: Record<string, string | number | undefined>) =>
       apiFetch<T>(path, token, { params }),
     post: <T,>(path: string, body?: unknown, idempotencyKey?: string) =>
@@ -123,7 +125,38 @@ export function useLinkIdentity(customerId: string) {
     onSuccess: (customer) => {
       queryClient.setQueryData(["customer", customerId], customer);
       queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["identityLinks", customerId] });
     },
+  });
+}
+
+export interface RelinkIdentityInput {
+  keycloakSubject: string;
+  /** Required by the backend: the old login loses access and the new one gains it. */
+  reason: string;
+}
+
+/** Replaces an existing link. Admin only; the backend refuses a teller with 403. */
+export function useRelinkIdentity(customerId: string) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RelinkIdentityInput) =>
+      apiFetch<Customer>(`/customers/${customerId}/identity`, api.token, { method: "PUT", body: input }),
+    onSuccess: (customer) => {
+      queryClient.setQueryData(["customer", customerId], customer);
+      queryClient.invalidateQueries({ queryKey: ["identityLinks", customerId] });
+    },
+  });
+}
+
+/** Every identity linked to a customer, newest first. Staff only. */
+export function useIdentityLinks(customerId: string, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["identityLinks", customerId, page],
+    queryFn: () =>
+      api.get<PagedResponse<IdentityLink>>(`/customers/${customerId}/identity-links`, { page, size: 10 }),
   });
 }
 

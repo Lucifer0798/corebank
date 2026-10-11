@@ -16,7 +16,7 @@ export class ApiError extends Error {
 }
 
 export interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   /** Required by the backend on every money-moving POST; generate a fresh one per user action. */
   idempotencyKey?: string;
