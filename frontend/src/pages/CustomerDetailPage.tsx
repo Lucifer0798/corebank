@@ -8,6 +8,7 @@ import {
   useOpenAccount,
 } from "../api/hooks";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { IdentityCard } from "../components/IdentityCard";
 import { KycCard } from "../components/KycCard";
 import { NotificationsCard } from "../components/Notifications";
 import { SpendingInsights } from "../components/SpendingInsights";
@@ -63,6 +64,8 @@ export function CustomerDetailPage() {
       <KycCard customerId={customer.id} current={customer.kycStatus} admin={admin} />
 
       {!customer.identityLinked && <LinkIdentityCard customerId={customer.id} />}
+
+      <IdentityCard customerId={customer.id} linked={customer.identityLinked} admin={admin} />
 
       <div className="card">
         <div className="page-header" style={{ marginBottom: "0.5rem" }}>

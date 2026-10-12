@@ -1,5 +1,8 @@
 package com.corebank.customer.web;
 
+import org.springframework.web.bind.annotation.PutMapping;
+import com.corebank.customer.dto.RelinkIdentityRequest;
+import com.corebank.customer.dto.IdentityLinkResponse;
 import com.corebank.common.web.PagedResponse;
 import com.corebank.customer.domain.KycDecider;
 import com.corebank.customer.dto.CreateCustomerRequest;
@@ -100,9 +103,30 @@ public class CustomerController {
 
     @PatchMapping("/{customerId}/identity")
     @Operation(summary = "Link a Keycloak identity to this customer",
-            description = "Required before that identity's tokens can read the customer's own accounts.")
+            description = "Required before that identity's tokens can read the customer's own accounts. A one-time "
+                    + "step: a customer who already has a linked identity is refused with 409 CUSTOMER_ALREADY_LINKED, "
+                    + "and replacing it is the admin-only PUT.")
     public CustomerResponse linkIdentity(@PathVariable UUID customerId,
                                          @Valid @RequestBody LinkIdentityRequest request) {
         return customerService.linkIdentity(customerId, request.keycloakSubject());
+    }
+
+    @PutMapping("/{customerId}/identity")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Replace the Keycloak identity linked to this customer",
+            description = "Admin only, with a reason: the old login loses access to the customer's accounts and "
+                    + "the new one gains it. Kept, with who did it, in the identity-link history.")
+    public CustomerResponse relinkIdentity(@PathVariable UUID customerId,
+                                           @Valid @RequestBody RelinkIdentityRequest request) {
+        return customerService.relinkIdentity(customerId, request.keycloakSubject(), request.reason());
+    }
+
+    @GetMapping("/{customerId}/identity-links")
+    @Operation(summary = "Every identity linked to this customer, who linked it and why -- newest first")
+    public PagedResponse<IdentityLinkResponse> identityLinks(
+            @PathVariable UUID customerId,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return PagedResponse.of(customerService.identityLinks(customerId, PageRequest.of(page, size)));
     }
 }

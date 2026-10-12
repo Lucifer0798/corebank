@@ -4,16 +4,20 @@ import com.corebank.common.SequenceNumberGenerator;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.common.exception.ConflictException;
 import com.corebank.common.exception.ResourceNotFoundException;
+import com.corebank.common.security.Actors;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.domain.CustomerStatus;
+import com.corebank.customer.domain.IdentityLink;
 import com.corebank.customer.domain.KycDecider;
 import com.corebank.customer.domain.KycDecision;
 import com.corebank.customer.domain.KycStatus;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.dto.CustomerResponse;
+import com.corebank.customer.dto.IdentityLinkResponse;
 import com.corebank.customer.dto.KycDecisionResponse;
 import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.customer.repository.CustomerRepository;
+import com.corebank.customer.repository.IdentityLinkRepository;
 import com.corebank.customer.repository.KycDecisionRepository;
 import java.time.Clock;
 import java.time.Instant;
@@ -37,10 +41,13 @@ public class CustomerService {
     private final Clock clock;
     private final ApplicationEventPublisher eventPublisher;
     private final KycDecisionRepository decisions;
+    private final IdentityLinkRepository identityLinks;
 
     public CustomerService(CustomerRepository customers, SequenceNumberGenerator sequences, Clock clock,
-                            ApplicationEventPublisher eventPublisher, KycDecisionRepository decisions) {
+                            ApplicationEventPublisher eventPublisher, KycDecisionRepository decisions,
+                            IdentityLinkRepository identityLinks) {
         this.customers = customers;
+        this.identityLinks = identityLinks;
         this.decisions = decisions;
         this.sequences = sequences;
         this.clock = clock;
@@ -126,10 +133,55 @@ public class CustomerService {
     @Transactional
     public CustomerResponse linkIdentity(UUID id, String keycloakSubject) {
         Customer customer = require(id);
+        // Linking is a one-time step. It used to overwrite silently: a second link pointed the
+        // customer's record at a different login, which could then read their accounts, while the
+        // customer's own login stopped resolving -- and nothing said who had done it. Replacing a
+        // link is relinkIdentity: admin only, with a reason.
+        if (customer.getKeycloakSubject() != null) {
+            throw new ConflictException("CUSTOMER_ALREADY_LINKED",
+                    "This customer already has a linked identity; replacing it is an admin relink, with a reason");
+        }
+        return link(customer, keycloakSubject, null);
+    }
+
+    /**
+     * Replaces the identity linked to a customer -- for a genuine case, such as a customer whose
+     * Keycloak account had to be recreated. Admin only at the controller, and a reason is required:
+     * this decides who can read the customer's money, and the old login loses access.
+     */
+    @Transactional
+    public CustomerResponse relinkIdentity(UUID id, String keycloakSubject, String reason) {
+        Customer customer = require(id);
+        if (customer.getKeycloakSubject() == null) {
+            throw new BusinessRuleException("CUSTOMER_NOT_LINKED",
+                    "This customer has no linked identity to replace; link one instead");
+        }
+        if (customer.getKeycloakSubject().equals(keycloakSubject)) {
+            throw new BusinessRuleException("IDENTITY_UNCHANGED", "This identity is already the one linked");
+        }
+        String statedReason = reason == null || reason.isBlank() ? null : reason.strip();
+        if (statedReason == null) {
+            throw new BusinessRuleException("RELINK_REASON_REQUIRED",
+                    "Say why: replacing a customer's linked identity takes access from one login and gives it "
+                            + "to another, and the reason is kept with it");
+        }
+        return link(customer, keycloakSubject, statedReason);
+    }
+
+    /** Every identity linked to this customer, newest first. */
+    @Transactional(readOnly = true)
+    public Page<IdentityLinkResponse> identityLinks(UUID id, Pageable pageable) {
+        require(id);
+        return identityLinks.findByCustomerIdOrderByLinkedAtDesc(id, pageable).map(IdentityLinkResponse::from);
+    }
+
+    private CustomerResponse link(Customer customer, String keycloakSubject, String reason) {
         if (customers.existsByKeycloakSubject(keycloakSubject)) {
             throw new ConflictException("IDENTITY_ALREADY_LINKED",
                     "This Keycloak identity is already linked to another customer");
         }
+        identityLinks.save(new IdentityLink(customer.getId(), customer.getKeycloakSubject(), keycloakSubject,
+                Actors.current(), reason, Instant.now(clock)));
         customer.setKeycloakSubject(keycloakSubject);
         eventPublisher.publishEvent(CustomerChangedEvent.from(customer));
         return CustomerResponse.from(customer);
