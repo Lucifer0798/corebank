@@ -750,6 +750,28 @@ The transaction page shows it as "Posted by", and a job reads as one ("System:
 interest-runner"). Customers never see it: the transaction endpoint is staff-only, and the
 statement lines a customer reads do not carry it.
 
+### Who placed a hold, and who set up a standing order
+
+A hold reserves a customer's money and a standing order moves it every month, but neither recorded
+who did it (V20 adds both). A capture's posting has said who since V17; placing the hold,
+releasing it, or its lapsing, did not. A standing order's payments are attributed to the runner,
+which is true and says nothing about who authorised them, and cancelling or resuming one left no
+trace.
+
+- **Holds** record `placedBy` and `settledBy`, both from `Actors`. A hold is placed once and
+  settled once, so two columns on its row cover its whole life. A hold nobody captured or released
+  in time is `system:hold-expiry`, because the sweep now names itself. Both are on every hold in the
+  API. The frontend does not list holds, so for now this is API-only.
+- **Standing orders** record `createdBy` on the row, since every listing shows it. What happens
+  afterwards goes in an append-only `scheduled_transfer_event` history. Cancellations and
+  resumptions record whoever did them, with an optional reason: these are usually routine, on the
+  customer's own request, so the reason is not compulsory as it is for a freeze. A suspension is
+  attributed to `system:scheduled-transfer-runner`, with the customer-safe failure reason. The
+  account page shows "Set up by" on each instruction, and staff can open its history.
+
+That covers every staff action and every job that changes money or access: postings, KYC
+decisions, freezes and closures, identity links, holds and standing orders.
+
 ### Idempotency
 
 `Idempotency-Key` is required on deposits, withdrawals and transfers.
@@ -1098,8 +1120,9 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/scheduled-transfers` | TELLER, ADMIN | Set up a standing instruction |
 | `GET` | `/api/v1/scheduled-transfers/{id}` | TELLER, ADMIN | One instruction, and how it has fared |
 | `GET` | `/api/v1/accounts/{id}/scheduled-transfers` | owner, staff | Instructions against one account, both directions |
-| `POST` | `/api/v1/scheduled-transfers/{id}/cancel` | TELLER, ADMIN | Stop one |
-| `POST` | `/api/v1/scheduled-transfers/{id}/resume` | TELLER, ADMIN | Restart a suspended one from its next occurrence |
+| `POST` | `/api/v1/scheduled-transfers/{id}/cancel` | TELLER, ADMIN | Stop one; `reason` optional |
+| `GET` | `/api/v1/scheduled-transfers/{id}/events` | TELLER, ADMIN | What happened to it since it was set up: cancelled, resumed, suspended, by whom |
+| `POST` | `/api/v1/scheduled-transfers/{id}/resume` | TELLER, ADMIN | Restart a suspended one from its next occurrence; `reason` optional |
 | `POST` | `/api/v1/transactions/{reference}/reversal` | ADMIN | Reverse a posting — needs `Idempotency-Key` and a `reason` |
 | `GET` | `/api/v1/accounts/{id}/transactions` | owner, staff | Statement, newest first |
 | `GET` | `/api/v1/transactions/{reference}` | TELLER, ADMIN | One transaction, its legs, and who made it (`initiatedBy`) |

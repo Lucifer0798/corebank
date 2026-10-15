@@ -1,5 +1,6 @@
 package com.corebank.account.service;
 
+import com.corebank.common.security.Actors;
 import com.corebank.account.domain.Account;
 import com.corebank.account.domain.AccountHold;
 import com.corebank.account.domain.HoldStatus;
@@ -106,6 +107,7 @@ public class HoldService {
         hold.setCurrency(currency);
         hold.setDescription(request.description());
         hold.setPlacedAt(now);
+        hold.placedBy(Actors.current());
         hold.setExpiresAt(now.plus(request.expiresInHours() == null
                 ? DEFAULT_EXPIRY
                 : Duration.ofHours(request.expiresInHours())));
@@ -148,7 +150,7 @@ public class HoldService {
                 // could refuse a capture the hold exists to guarantee.
                 false);
 
-        hold.settle(HoldStatus.CAPTURED, now, posting.reference());
+        hold.settle(HoldStatus.CAPTURED, now, posting.reference(), Actors.current());
         count("captured");
         log.info("Captured hold {} for {} against account {}", reference, amount, account.getId());
         return HoldResponse.from(hold);
@@ -231,7 +233,7 @@ public class HoldService {
     private void settleWithoutPosting(AccountHold hold, HoldStatus outcome) {
         Account account = accountService.requireForUpdate(hold.getAccount().getId());
         account.freeHold(hold.getAmount());
-        hold.settle(outcome, Instant.now(clock), null);
+        hold.settle(outcome, Instant.now(clock), null, Actors.current());
         accountService.evictCache(account.getId());
     }
 

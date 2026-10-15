@@ -148,7 +148,7 @@ class AccountClosureTest {
 
         assertThatThrownBy(() -> close(payer)).hasMessageContaining("1 standing instruction");
 
-        scheduledTransfers.cancel(schedule);
+        scheduledTransfers.cancel(schedule, null);
         close(payer);
         assertThat(accountService.get(payer).status()).isEqualTo(AccountStatus.CLOSED);
     }
@@ -176,7 +176,7 @@ class AccountClosureTest {
         UUID oneOff = instruction(payer, payee, ScheduleFrequency.ONCE);
         scheduledTransfers.markSuccess(oneOff, today);
         UUID cancelled = instruction(payer, payee, ScheduleFrequency.MONTHLY);
-        scheduledTransfers.cancel(cancelled);
+        scheduledTransfers.cancel(cancelled, null);
 
         close(payer);
         assertThat(accountService.get(payer).status()).isEqualTo(AccountStatus.CLOSED);

@@ -1,5 +1,6 @@
 package com.corebank.account.dto;
 
+import com.corebank.common.security.Actor;
 import com.corebank.account.domain.AccountHold;
 import com.corebank.account.domain.HoldStatus;
 import com.corebank.common.Money;
@@ -27,7 +28,14 @@ public record HoldResponse(
         @Schema(description = "The reversal that undid this hold's capture; null unless that happened. "
                 + "When set, the merchant's payment was taken back, though the capture reference above "
                 + "still names the posting that was made.")
-        String captureReversalReference) {
+        String captureReversalReference,
+
+        @Schema(description = "Who placed the hold. Null on holds from before this was recorded.")
+        Actor placedBy,
+
+        @Schema(description = "Who captured or released it, or system:hold-expiry if it lapsed. Null while "
+                + "outstanding, and on holds settled before this was recorded.")
+        Actor settledBy) {
 
     public static HoldResponse from(AccountHold hold) {
         return new HoldResponse(
@@ -42,6 +50,8 @@ public record HoldResponse(
                 hold.getExpiresAt(),
                 hold.getSettledAt(),
                 hold.getCapturedTransactionReference(),
-                hold.getCaptureReversalReference());
+                hold.getCaptureReversalReference(),
+                hold.getPlacedBySubject() == null ? null : new Actor(hold.getPlacedBySubject(), hold.getPlacedByName()),
+                hold.getSettledBySubject() == null ? null : new Actor(hold.getSettledBySubject(), hold.getSettledByName()));
     }
 }

@@ -4,6 +4,7 @@ import {
   useCancelScheduledTransfer,
   useCreateScheduledTransfer,
   useResumeScheduledTransfer,
+  useScheduleEvents,
   useScheduledTransfers,
 } from "../api/hooks";
 import type { Account, PagedResponse, ScheduledTransfer } from "../api/types";
@@ -19,6 +20,7 @@ vi.mock("../api/hooks", () => ({
   useCancelScheduledTransfer: vi.fn(),
   useCreateScheduledTransfer: vi.fn(),
   useResumeScheduledTransfer: vi.fn(),
+  useScheduleEvents: vi.fn(),
 }));
 
 const ACCOUNT_ID = "11111111-1111-1111-1111-111111111111";
@@ -59,6 +61,7 @@ function schedule(overrides: Partial<ScheduledTransfer> = {}): ScheduledTransfer
     consecutiveFailures: 0,
     lastRunOn: "2026-10-01",
     lastError: null,
+    createdBy: null,
     ...overrides,
   };
 }
@@ -170,6 +173,47 @@ describe("ScheduledTransfersCard", () => {
 
     // Resuming is a staff decision -- the backend allows TELLER and ADMIN only.
     expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  });
+
+  it("says who set a standing order up", () => {
+    listing([schedule({ createdBy: { subject: "teller-subject", name: "anil" } })]);
+
+    render(<ScheduledTransfersCard account={account()} staff />);
+
+    expect(screen.getByText("Set up by anil")).toBeTruthy();
+  });
+
+  it("opens a standing order's history for staff", () => {
+    vi.mocked(useScheduleEvents).mockReturnValue({
+      data: {
+        content: [{
+          id: "e1",
+          event: "SUSPENDED",
+          by: { subject: "system:scheduled-transfer-runner", name: "scheduled-transfer-runner" },
+          reason: "Stopped after 3 failed attempt(s) in a row: there was not enough money in the account",
+          occurredAt: "2026-10-15T00:00:00Z",
+        }],
+        page: 0, size: 20, totalElements: 1, totalPages: 1, last: true,
+      },
+      error: null,
+    } as unknown as ReturnType<typeof useScheduleEvents>);
+    listing([schedule({ status: "SUSPENDED", nextRunOn: null })]);
+
+    render(<ScheduledTransfersCard account={account()} staff />);
+    expect(screen.queryByText(/scheduled-transfer-runner/)).toBeNull();
+    screen.getByRole("button", { name: "History" }).click();
+
+    return screen.findByText(/by scheduled-transfer-runner/).then((line) => {
+      expect(line.textContent).toContain("not enough money");
+    });
+  });
+
+  it("gives a customer no History button", () => {
+    listing([schedule()]);
+
+    render(<ScheduledTransfersCard account={account()} staff={false} />);
+
+    expect(screen.queryByRole("button", { name: "History" })).toBeNull();
   });
 
   it("gives a customer no Cancel button and no create form", () => {

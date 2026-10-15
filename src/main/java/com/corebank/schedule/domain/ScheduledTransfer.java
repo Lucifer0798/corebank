@@ -97,6 +97,13 @@ public class ScheduledTransfer extends AuditableEntity {
     @Column(name = "last_error_code", length = 50)
     private String lastErrorCode;
 
+    /** Who set it up -- the authority every occurrence's payment rests on. Null only before V20. */
+    @Column(name = "created_by_subject", updatable = false, length = 64)
+    private String createdBySubject;
+
+    @Column(name = "created_by_name", updatable = false, length = 255)
+    private String createdByName;
+
     /**
      * The key every attempt at one occurrence shares, so a retry -- after a crash mid-run, or a
      * second instance that raced for the same row -- replays the original posting instead of

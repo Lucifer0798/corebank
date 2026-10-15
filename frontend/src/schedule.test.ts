@@ -28,6 +28,7 @@ function schedule(overrides: Partial<ScheduledTransfer> = {}): ScheduledTransfer
     consecutiveFailures: 0,
     lastRunOn: "2026-10-01",
     lastError: null,
+    createdBy: null,
     ...overrides,
   };
 }
