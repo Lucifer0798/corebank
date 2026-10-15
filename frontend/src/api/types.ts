@@ -145,6 +145,18 @@ export interface ScheduledTransfer {
   consecutiveFailures: number;
   lastRunOn: string | null;
   lastError: string | null;
+  /** Who set it up. Null on instructions from before this was recorded. */
+  createdBy: { subject: string; name: string | null } | null;
+}
+
+/** Mirrors com.corebank.schedule.dto.ScheduledTransferEventResponse. */
+export interface ScheduledTransferEvent {
+  id: string;
+  event: "CANCELLED" | "RESUMED" | "SUSPENDED";
+  /** A member of staff, or system:scheduled-transfer-runner for a suspension. */
+  by: { subject: string; name: string | null };
+  reason: string | null;
+  occurredAt: string;
 }
 
 export interface StatementLine {

@@ -1,5 +1,6 @@
 package com.corebank.schedule.dto;
 
+import com.corebank.common.security.Actor;
 import com.corebank.common.Money;
 import com.corebank.common.exception.FailureReason;
 import com.corebank.schedule.domain.ScheduleFrequency;
@@ -36,7 +37,10 @@ public record ScheduledTransferResponse(
         @Schema(description = "Why the most recent attempt was refused, if it was -- in words safe for "
                 + "either account's owner to read, since both can list this schedule. Never the "
                 + "underlying error, which names account numbers and the payer's balance.")
-        String lastError) {
+        String lastError,
+
+        @Schema(description = "Who set it up. Null on instructions from before this was recorded.")
+        Actor createdBy) {
 
     public static ScheduledTransferResponse from(ScheduledTransfer schedule) {
         return new ScheduledTransferResponse(
@@ -54,7 +58,10 @@ public record ScheduledTransferResponse(
                 schedule.getRunsCompleted(),
                 schedule.getConsecutiveFailures(),
                 schedule.getLastRunOn(),
-                lastErrorOf(schedule));
+                lastErrorOf(schedule),
+                schedule.getCreatedBySubject() == null
+                        ? null
+                        : new Actor(schedule.getCreatedBySubject(), schedule.getCreatedByName()));
     }
 
     /** Null when the last attempt did not fail; otherwise the customer-safe reason. */

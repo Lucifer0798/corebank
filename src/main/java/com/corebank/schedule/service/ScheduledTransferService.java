@@ -1,5 +1,11 @@
 package com.corebank.schedule.service;
 
+import com.corebank.schedule.repository.ScheduledTransferEventRepository;
+import com.corebank.schedule.dto.ScheduledTransferEventResponse;
+import com.corebank.schedule.domain.ScheduledTransferEvent;
+import com.corebank.schedule.domain.ScheduleEventType;
+import com.corebank.common.security.Actors;
+import com.corebank.common.security.Actor;
 import com.corebank.account.domain.Account;
 import com.corebank.account.service.AccountService;
 import com.corebank.common.Money;
@@ -65,6 +71,7 @@ public class ScheduledTransferService {
     private final TransactionService transactionService;
     private final IdempotencyService idempotencyService;
     private final NotificationService notificationService;
+    private final ScheduledTransferEventRepository events;
     private final CoreBankProperties.ScheduledTransfers properties;
     private final Clock clock;
 
@@ -73,6 +80,7 @@ public class ScheduledTransferService {
                                     TransactionService transactionService,
                                     IdempotencyService idempotencyService,
                                     NotificationService notificationService,
+                                    ScheduledTransferEventRepository events,
                                     CoreBankProperties properties,
                                     Clock clock) {
         this.schedules = schedules;
@@ -80,6 +88,7 @@ public class ScheduledTransferService {
         this.transactionService = transactionService;
         this.idempotencyService = idempotencyService;
         this.notificationService = notificationService;
+        this.events = events;
         this.properties = properties.scheduledTransfers();
         this.clock = clock;
     }
@@ -117,6 +126,9 @@ public class ScheduledTransferService {
         schedule.setStartsOn(request.startsOn());
         schedule.setEndsOn(request.endsOn());
         schedule.schedule();
+        Actor creator = Actors.current();
+        schedule.setCreatedBySubject(creator.subject());
+        schedule.setCreatedByName(creator.name());
 
         return ScheduledTransferResponse.from(schedules.save(schedule));
     }
@@ -138,19 +150,21 @@ public class ScheduledTransferService {
      * have been one of them closing, and resuming into a closed account would only fail again.
      */
     @Transactional
-    public ScheduledTransferResponse resume(UUID id) {
+    public ScheduledTransferResponse resume(UUID id, String reason) {
         ScheduledTransfer schedule = require(id);
         lockPostableCustomerAccounts(schedule.getSourceAccountId(), schedule.getDestinationAccountId(),
                 schedule.getCurrency());
         schedule.resume(LocalDate.now(clock));
+        record(schedule, ScheduleEventType.RESUMED, reason);
         log.info("Scheduled transfer {} resumed; next due {}", id, schedule.getNextRunOn());
         return ScheduledTransferResponse.from(schedule);
     }
 
     @Transactional
-    public ScheduledTransferResponse cancel(UUID id) {
+    public ScheduledTransferResponse cancel(UUID id, String reason) {
         ScheduledTransfer schedule = require(id);
         schedule.cancel();
+        record(schedule, ScheduleEventType.CANCELLED, reason);
         return ScheduledTransferResponse.from(schedule);
     }
 
@@ -209,6 +223,13 @@ public class ScheduledTransferService {
         int max = properties.maxConsecutiveFailures();
         advanceIfStillDue(id, dueOn, schedule -> {
             schedule.recordFailure(dueOn, failure.getMessage(), FailureReason.codeOf(failure), max);
+            if (schedule.getStatus() == ScheduleStatus.SUSPENDED) {
+                // The runner's doing, attributed to it. The reason is the customer-safe one, since the
+                // instruction -- and so this history -- is about both accounts.
+                record(schedule, ScheduleEventType.SUSPENDED,
+                        "Stopped after " + schedule.getConsecutiveFailures() + " failed attempt(s) in a row: "
+                                + FailureReason.describe(schedule.getLastErrorCode()));
+            }
             notificationService.scheduledTransferMissed(new MissedScheduledTransfer(
                     schedule.getId(),
                     schedule.getSourceAccountId(),
@@ -250,6 +271,20 @@ public class ScheduledTransferService {
             return;
         }
         action.accept(schedule);
+    }
+
+    /** Everything that happened to this instruction after it was set up, newest first. */
+    @Transactional(readOnly = true)
+    public Page<ScheduledTransferEventResponse> events(UUID id, Pageable pageable) {
+        require(id);
+        return events.findByScheduledTransferIdOrderByOccurredAtDesc(id, pageable)
+                .map(ScheduledTransferEventResponse::from);
+    }
+
+    private void record(ScheduledTransfer schedule, ScheduleEventType event, String reason) {
+        String statedReason = reason == null || reason.isBlank() ? null : reason.strip();
+        events.save(new ScheduledTransferEvent(schedule.getId(), event, Actors.current(), statedReason,
+                java.time.Instant.now(clock)));
     }
 
     private ScheduledTransfer require(UUID id) {

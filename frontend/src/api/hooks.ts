@@ -14,6 +14,7 @@ import type {
   PagedResponse,
   ScheduleFrequency,
   ScheduledTransfer,
+  ScheduledTransferEvent,
   SearchResponse,
   StatementLine,
   Transaction,
@@ -424,6 +425,17 @@ export function useResumeScheduledTransfer() {
   });
 }
 
+/** What happened to a standing instruction after it was set up. Staff only; fetched when opened. */
+export function useScheduleEvents(scheduleId: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["scheduleEvents", scheduleId],
+    queryFn: () =>
+      api.get<PagedResponse<ScheduledTransferEvent>>(`/scheduled-transfers/${scheduleId}/events`, { size: 20 }),
+    enabled,
+  });
+}
+
 /**
  * A mandate is listed against both accounts it names, so both lists go stale together -- the page
  * showing only one of them would otherwise keep displaying a cancelled instruction as live.
@@ -435,6 +447,7 @@ function invalidateSchedules(
   for (const id of [schedule.sourceAccountId, schedule.destinationAccountId]) {
     queryClient.invalidateQueries({ queryKey: ["scheduledTransfers", id] });
   }
+  queryClient.invalidateQueries({ queryKey: ["scheduleEvents", schedule.id] });
 }
 
 // ---------------------------------------------------------------------------------------------

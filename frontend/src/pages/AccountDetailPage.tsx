@@ -6,6 +6,7 @@ import {
   useBalance,
   useCancelScheduledTransfer,
   useResumeScheduledTransfer,
+  useScheduleEvents,
   useCreateScheduledTransfer,
   useDeposit,
   useScheduledTransfers,
@@ -264,6 +265,7 @@ export function ScheduledTransfersCard({ account, staff }: { account: Account; s
   const { data: schedules, error } = useScheduledTransfers(account.id, page);
   const cancel = useCancelScheduledTransfer();
   const resume = useResumeScheduledTransfer();
+  const [openHistory, setOpenHistory] = useState<string | null>(null);
 
   return (
     <div className="card">
@@ -297,7 +299,12 @@ export function ScheduledTransfersCard({ account, staff }: { account: Account; s
                   <td className={`amount ${outgoing ? "amount--negative" : "amount--positive"}`}>
                     {formatAmount(outgoing ? -schedule.amount : schedule.amount, schedule.currency)}
                   </td>
-                  <td className="muted">{schedule.description ?? "—"}</td>
+                  <td className="muted">
+                    {schedule.description ?? "—"}
+                    {schedule.createdBy && (
+                      <div className="muted">Set up by {schedule.createdBy.name ?? schedule.createdBy.subject}</div>
+                    )}
+                  </td>
                   <td><StatusPill status={schedule.status} /></td>
                   {staff && (
                     <td>
@@ -319,9 +326,22 @@ export function ScheduledTransfersCard({ account, staff }: { account: Account; s
                           Resume
                         </button>
                       )}
+                      <button
+                        className="btn btn--secondary"
+                        onClick={() => setOpenHistory(openHistory === schedule.id ? null : schedule.id)}
+                      >
+                        History
+                      </button>
                     </td>
                   )}
                 </tr>
+                {staff && openHistory === schedule.id && (
+                  <tr>
+                    <td colSpan={6}>
+                      <ScheduleHistory scheduleId={schedule.id} />
+                    </td>
+                  </tr>
+                )}
                 {attention.level !== "none" && (
                   <tr>
                     <td colSpan={staff ? 6 : 5} className="muted">
@@ -420,5 +440,33 @@ function NewScheduleForm({ account }: { account: Account }) {
         </button>
       </form>
     </>
+  );
+}
+
+/**
+ * What happened to one standing instruction after it was set up: cancelled, resumed, or suspended by
+ * the runner -- each with who and, where given, why. Staff only; loaded when opened.
+ */
+export function ScheduleHistory({ scheduleId }: { scheduleId: string }) {
+  const { data: events, error } = useScheduleEvents(scheduleId, true);
+  if (error) {
+    return <ErrorBanner error={error} />;
+  }
+  if (!events) {
+    return <span className="muted">Loading&hellip;</span>;
+  }
+  if (events.content.length === 0) {
+    return <span className="muted">Nothing has happened to it since it was set up.</span>;
+  }
+  return (
+    <ul className="muted">
+      {events.content.map((event) => (
+        <li key={event.id}>
+          {formatDateTime(event.occurredAt)}: <StatusPill status={event.event} /> by{" "}
+          {event.by.name ?? event.by.subject}
+          {event.reason ? ` -- ${event.reason}` : ""}
+        </li>
+      ))}
+    </ul>
   );
 }

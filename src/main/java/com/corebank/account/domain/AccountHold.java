@@ -1,5 +1,6 @@
 package com.corebank.account.domain;
 
+import com.corebank.common.security.Actor;
 import com.corebank.common.domain.AuditableEntity;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.common.exception.ConflictException;
@@ -82,6 +83,20 @@ public class AccountHold extends AuditableEntity {
     @Column(name = "capture_reversal_reference", length = 36)
     private String captureReversalReference;
 
+    /** Who placed it -- see {@code Actors}. Null only on holds from before V20. */
+    @Column(name = "placed_by_subject", updatable = false, length = 64)
+    private String placedBySubject;
+
+    @Column(name = "placed_by_name", updatable = false, length = 255)
+    private String placedByName;
+
+    /** Who captured or released it, or system:hold-expiry when nobody did in time. */
+    @Column(name = "settled_by_subject", length = 64)
+    private String settledBySubject;
+
+    @Column(name = "settled_by_name", length = 255)
+    private String settledByName;
+
     /**
      * Whether this hold can still be acted on, and if not, why not.
      *
@@ -102,10 +117,17 @@ public class AccountHold extends AuditableEntity {
         }
     }
 
-    public void settle(HoldStatus outcome, Instant at, String transactionReference) {
+    public void settle(HoldStatus outcome, Instant at, String transactionReference, Actor by) {
         this.status = outcome;
         this.settledAt = at;
         this.capturedTransactionReference = transactionReference;
+        this.settledBySubject = by.subject();
+        this.settledByName = by.name();
+    }
+
+    public void placedBy(Actor by) {
+        this.placedBySubject = by.subject();
+        this.placedByName = by.name();
     }
 
     /**

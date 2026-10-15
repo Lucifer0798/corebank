@@ -209,7 +209,7 @@ class ScheduledTransferRunnerTest {
     @DisplayName("a cancelled mandate is never picked up again")
     void aCancelledMandateDoesNotRun() {
         ScheduledTransferResponse created = schedule(ScheduleFrequency.DAILY, "250.00", null);
-        scheduledTransfers.cancel(created.id());
+        scheduledTransfers.cancel(created.id(), null);
 
         runnerOn(today.plusDays(2)).run();
 
@@ -349,7 +349,7 @@ class ScheduledTransferRunnerTest {
     void aResumedInstructionPaysAgain() {
         ScheduledTransferResponse created = suspended();
 
-        ScheduledTransferResponse resumed = scheduledTransfers.resume(created.id());
+        ScheduledTransferResponse resumed = scheduledTransfers.resume(created.id(), null);
 
         // The runner here believed it was two days ahead when the last occurrence failed. Resume runs
         // on the real clock, but never hands back a date at or before the one that just failed.
@@ -370,7 +370,7 @@ class ScheduledTransferRunnerTest {
         ScheduledTransferResponse created = suspended();
         accountService.changeStatus(destination, AccountStatus.FROZEN, "Test fixture");
 
-        assertThatThrownBy(() -> scheduledTransfers.resume(created.id()))
+        assertThatThrownBy(() -> scheduledTransfers.resume(created.id(), null))
                 .isInstanceOf(BusinessRuleException.class)
                 .extracting(ex -> ((BusinessRuleException) ex).getCode())
                 .isEqualTo("ACCOUNT_FROZEN");

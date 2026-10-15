@@ -1,5 +1,7 @@
 package com.corebank.account.service;
 
+import com.corebank.common.security.Actors;
+import com.corebank.common.security.Actor;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +36,13 @@ public class HoldExpiryRunner {
 
     @Scheduled(fixedDelayString = "${corebank.holds.sweep-interval:5m}")
     public void sweep() {
+        // Nobody released these; time did. Recorded as the sweep rather than left blank.
+        Actors.runAs(ACTOR, this::expireDue);
+    }
+
+    static final Actor ACTOR = Actor.system("hold-expiry");
+
+    private void expireDue() {
         for (UUID id : holdService.findExpired()) {
             try {
                 holdService.expire(id);

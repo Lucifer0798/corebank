@@ -1,5 +1,7 @@
 package com.corebank.schedule.web;
 
+import com.corebank.schedule.dto.ScheduledTransferEventResponse;
+import com.corebank.schedule.dto.ScheduleChangeRequest;
 import com.corebank.common.web.PagedResponse;
 import com.corebank.schedule.dto.CreateScheduledTransferRequest;
 import com.corebank.schedule.dto.ScheduledTransferResponse;
@@ -92,8 +94,9 @@ public class ScheduledTransferController {
             @ApiResponse(responseCode = "422", description = "It is not suspended, nothing is left to run "
                     + "(a one-off, or past its end date), or an account can no longer take part")
     })
-    public ScheduledTransferResponse resume(@PathVariable UUID id) {
-        return service.resume(id);
+    public ScheduledTransferResponse resume(@PathVariable UUID id,
+                                            @Valid @RequestBody(required = false) ScheduleChangeRequest request) {
+        return service.resume(id, request == null ? null : request.reason());
     }
 
     @PostMapping("/scheduled-transfers/{id}/cancel")
@@ -104,7 +107,20 @@ public class ScheduledTransferController {
             @ApiResponse(responseCode = "200", description = "Cancelled"),
             @ApiResponse(responseCode = "422", description = "It had already stopped")
     })
-    public ScheduledTransferResponse cancel(@PathVariable UUID id) {
-        return service.cancel(id);
+    public ScheduledTransferResponse cancel(@PathVariable UUID id,
+                                            @Valid @RequestBody(required = false) ScheduleChangeRequest request) {
+        return service.cancel(id, request == null ? null : request.reason());
+    }
+
+    @GetMapping("/scheduled-transfers/{id}/events")
+    @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
+    @Operation(summary = "What happened to a standing instruction after it was set up, and who did it",
+            description = "Cancellations, resumptions and suspensions, newest first. Who set it up is on the "
+                    + "instruction itself (createdBy). Staff only. Starts when this history was introduced.")
+    public PagedResponse<ScheduledTransferEventResponse> events(
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return PagedResponse.of(service.events(id, PageRequest.of(page, size)));
     }
 }
