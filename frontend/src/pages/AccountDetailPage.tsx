@@ -21,6 +21,7 @@ import { StatusPill } from "../components/StatusPill";
 import { formatAmount, formatCalendarDate, formatDateTime } from "../format";
 import { isAdmin, isStaff, rolesFromAccessToken } from "../auth/roles";
 import { AccountStatusCard } from "../components/AccountStatusCard";
+import { HoldsCard } from "../components/HoldsCard";
 import { canCancel, canResume, directionFor, scheduleAttention } from "../schedule";
 
 export function AccountDetailPage() {
@@ -93,6 +94,8 @@ export function AccountDetailPage() {
       </div>
 
       {staff && <AccountStatusCard account={account} admin={admin} />}
+
+      <HoldsCard account={account} staff={staff} />
 
       {staff && account.status !== "CLOSED" && <MoneyMovementCard accountId={account.id} />}
 

@@ -44,7 +44,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | gRPC | A read-only service-to-service surface (accounts, transactions, streamed statements) over the same service layer and the same Keycloak tokens as REST. |
 | Spending insights | A separate Python service categorises each posting off the Kafka feed and serves per-customer spending summaries. Read-only: it never writes to the ledger. |
 | Errors | RFC 7807 problem documents with a stable machine-readable `code` on every failure. |
-| Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements, standing instructions, notifications, and admin-only reversals. |
+| Frontend | A React SPA: customer onboarding and KYC, account opening, deposits/withdrawals/transfers, statements, holds, standing instructions, notifications, and admin-only reversals. |
 | Observability | Every request traced end to end (OpenTelemetry/Tempo); business and platform metrics in Grafana. |
 | CI | Every push builds and tests the backend and frontend, scans the Docker image with Trivy, and runs CodeQL. |
 | Docs | Swagger UI at `/swagger-ui.html`, OpenAPI JSON at `/v3/api-docs`. |
@@ -532,6 +532,14 @@ Expiry is checked against the clock, not against a status column. The sweep that
 in the database; a capture arriving then is refused on the clock rather than honoured because a
 background job happened not to have run. The sweep only gives the customer their available balance
 back, which is why it can afford to be slow.
+
+**The account page lists the holds behind its "On hold" figure.** For a long time it showed only the
+total: a customer could see that 4,600 was reserved, but not that it was a 4,500 hotel
+authorisation expiring on Friday. Anyone who can see the account sees each hold's description,
+amount, expiry and status. Staff also see who placed and settled it, and can capture an
+outstanding hold (in full, or for a typed partial amount; the backend's rules apply either way) or
+release it. Holds are not placed from the screen, since they normally come from a card network or
+merchant.
 
 ### KYC after opening
 
