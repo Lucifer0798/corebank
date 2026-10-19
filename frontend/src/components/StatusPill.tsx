@@ -9,6 +9,7 @@ const TONE_BY_STATUS: Record<string, "success" | "warning" | "danger" | "neutral
   CLOSED: "danger",
   REVERSED: "danger",
   FAILED: "danger",
+  CAPTURE_REVERSED: "warning",
 };
 
 export function StatusPill({ status }: { status: string }) {

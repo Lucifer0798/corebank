@@ -21,6 +21,30 @@ export interface PagedResponse<T> {
   last: boolean;
 }
 
+export type HoldStatus = "ACTIVE" | "CAPTURED" | "RELEASED" | "EXPIRED" | "CAPTURE_REVERSED";
+
+/** Mirrors com.corebank.account.dto.HoldResponse. */
+export interface Hold {
+  id: string;
+  reference: string;
+  accountId: string;
+  amount: number;
+  currency: string;
+  description: string | null;
+  status: HoldStatus;
+  placedAt: string;
+  expiresAt: string;
+  settledAt: string | null;
+  /** The posting a capture produced; null on anything that moved no money. */
+  capturedTransactionReference: string | null;
+  /** The reversal that undid this hold's capture, if one did. */
+  captureReversalReference: string | null;
+  /** Who placed it; null on holds from before this was recorded. */
+  placedBy: { subject: string; name: string | null } | null;
+  /** Who captured or released it, or system:hold-expiry; null while outstanding. */
+  settledBy: { subject: string; name: string | null } | null;
+}
+
 /** Mirrors com.corebank.customer.dto.IdentityLinkResponse. History starts when it was introduced. */
 export interface IdentityLink {
   id: string;

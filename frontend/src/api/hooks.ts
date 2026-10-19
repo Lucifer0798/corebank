@@ -7,6 +7,7 @@ import type {
   Balance,
   Customer,
   CustomerSearchHit,
+  Hold,
   IdentityLink,
   KycDecision,
   KycStatus,
@@ -233,6 +234,48 @@ export function useChangeAccountStatus() {
       queryClient.invalidateQueries({ queryKey: ["accounts", "byCustomer", account.customerId] });
       queryClient.invalidateQueries({ queryKey: ["accountStatusChanges", account.id] });
     },
+  });
+}
+
+/** Holds on one account, newest first. Readable by the account's owner as well as staff. */
+export function useHolds(accountId: string, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["holds", accountId, page],
+    queryFn: () => api.get<PagedResponse<Hold>>(`/accounts/${accountId}/holds`, { page, size: 10 }),
+  });
+}
+
+/** A capture moves money, so the balance, the held total and the statement all go stale with the list. */
+function invalidateAfterHold(queryClient: ReturnType<typeof useQueryClient>, hold: Hold) {
+  queryClient.invalidateQueries({ queryKey: ["holds", hold.accountId] });
+  invalidateAfterPosting(queryClient, [hold.accountId]);
+}
+
+export interface CaptureHoldInput {
+  reference: string;
+  /** Omit to capture the full held amount. */
+  amount?: number;
+}
+
+/** Turns a hold into a posting. Needs an Idempotency-Key, like every money-moving POST. Staff only. */
+export function useCaptureHold() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ reference, amount }: CaptureHoldInput) =>
+      api.post<Hold>(`/holds/${reference}/capture`, amount === undefined ? {} : { amount }, newIdempotencyKey()),
+    onSuccess: (hold) => invalidateAfterHold(queryClient, hold),
+  });
+}
+
+/** Gives the reservation back without moving anything. Staff only. */
+export function useReleaseHold() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (reference: string) => api.post<Hold>(`/holds/${reference}/release`),
+    onSuccess: (hold) => invalidateAfterHold(queryClient, hold),
   });
 }
 
