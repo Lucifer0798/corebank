@@ -372,6 +372,23 @@ reserve — a transfer is converted at whatever is quoted when it is submitted, 
 on the posting at eight decimal places, because a rate is not money and rounding it to the money
 scale would make a large conversion irreproducible from its own audit trail.
 
+**Each leg says which currency it is in.** A cross-currency posting has four legs in two
+currencies, but neither the REST `Leg` nor the gRPC `TransactionLeg` used to say which. A client
+had only the transaction's currency, which is the sender's. The transaction page duly formatted the
+dollar account's 119.40 USD credit, and its balance afterwards, as rupees. Both now carry
+`currency`; it is additive, and is field 6 in the proto. The page shows each leg in its own
+currency, and the conversion as "10,000.00 INR → 119.40 USD at 0.01194".
+
+**The teller sees the quote before sending.** Once the transfer form has a complete destination
+account id in another currency, and an amount, it shows what the recipient would receive. That
+comes from `GET /fx/quote`, which nothing had ever called. It is an estimate: the rate is fixed when
+the transfer posts.
+
+**The money-movement form now sends the account's own currency.** It used to send none, and the
+backend defaults a missing currency to rupees, so every deposit, withdrawal and transfer on a
+dollar or euro account was refused with "held in USD, not INR". A probe confirmed it before the
+fix.
+
 ### Internal accounts exist per currency
 
 Every posting that touches an internal account looks it up by **type and currency** —
