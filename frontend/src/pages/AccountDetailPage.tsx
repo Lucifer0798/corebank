@@ -1,4 +1,5 @@
 import { Fragment, useState, type FormEvent } from "react";
+import { isAccountId, quoteSummary } from "../fx";
 import { useParams } from "react-router-dom";
 import { useAuth } from "react-oidc-context";
 import {
@@ -9,6 +10,7 @@ import {
   useScheduleEvents,
   useCreateScheduledTransfer,
   useDeposit,
+  useFxQuote,
   useScheduledTransfers,
   useStatement,
   useTransfer,
@@ -97,7 +99,7 @@ export function AccountDetailPage() {
 
       <HoldsCard account={account} staff={staff} />
 
-      {staff && account.status !== "CLOSED" && <MoneyMovementCard accountId={account.id} />}
+      {staff && account.status !== "CLOSED" && <MoneyMovementCard account={account} />}
 
       <ScheduledTransfersCard account={account} staff={staff} />
 
@@ -145,21 +147,25 @@ export function AccountDetailPage() {
   );
 }
 
-function MoneyMovementCard({ accountId }: { accountId: string }) {
+export function MoneyMovementCard({ account }: { account: Account }) {
+  const accountId = account.id;
   const [tab, setTab] = useState<"deposit" | "withdraw" | "transfer">("deposit");
   const deposit = useDeposit(accountId);
   const withdraw = useWithdraw(accountId);
   const transfer = useTransfer();
+  // The account's own currency on every request. Omitted, the backend assumes rupees, so every
+  // deposit, withdrawal and transfer on a dollar or euro account was refused with CURRENCY_MISMATCH.
+  const currency = account.currency;
 
   function handleDeposit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    deposit.mutate(readAmountAndDescription(new FormData(event.currentTarget)));
+    deposit.mutate({ ...readAmountAndDescription(new FormData(event.currentTarget)), currency });
     event.currentTarget.reset();
   }
 
   function handleWithdraw(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    withdraw.mutate(readAmountAndDescription(new FormData(event.currentTarget)));
+    withdraw.mutate({ ...readAmountAndDescription(new FormData(event.currentTarget)), currency });
     event.currentTarget.reset();
   }
 
@@ -169,10 +175,20 @@ function MoneyMovementCard({ accountId }: { accountId: string }) {
     transfer.mutate({
       sourceAccountId: accountId,
       destinationAccountId: String(form.get("destinationAccountId")),
+      // A transfer is denominated in the sending account's currency; the backend converts for the other side.
+      currency,
       ...readAmountAndDescription(form),
     });
     event.currentTarget.reset();
+    setDestination("");
+    setTransferAmount("");
   }
+
+  const [destination, setDestination] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
+  const destinationAccount = useAccount(isAccountId(destination) ? destination.trim() : undefined);
+  const crossesCurrencies = Boolean(destinationAccount.data) && destinationAccount.data!.currency !== currency;
+  const quote = useFxQuote(currency, destinationAccount.data?.currency, Number(transferAmount) || 0, crossesCurrencies);
 
   const active = tab === "deposit" ? deposit : tab === "withdraw" ? withdraw : transfer;
 
@@ -215,9 +231,16 @@ function MoneyMovementCard({ accountId }: { accountId: string }) {
         <form className="form" onSubmit={handleTransfer}>
           <div className="form-row">
             <label htmlFor="destinationAccountId">Destination account id</label>
-            <input id="destinationAccountId" name="destinationAccountId" required />
+            <input id="destinationAccountId" name="destinationAccountId" required
+              value={destination} onChange={(e) => setDestination(e.target.value)} />
           </div>
-          <AmountField />
+          <div className="form-row">
+            <label htmlFor="amount">Amount ({currency})</label>
+            <input id="amount" name="amount" type="number" min={0.01} step="0.01" required
+              value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} />
+          </div>
+          {crossesCurrencies && quote.data && <p className="muted">{quoteSummary(quote.data)}</p>}
+          {crossesCurrencies && quote.error && <ErrorBanner error={quote.error} />}
           <DescriptionField />
           <button className="btn" type="submit" disabled={transfer.isPending}>
             {transfer.isPending ? "Transferring…" : "Transfer"}

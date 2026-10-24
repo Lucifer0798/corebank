@@ -119,6 +119,18 @@ class FxTransferTest {
     }
 
     @Test
+    @DisplayName("each leg says which currency it is in")
+    void eachLegCarriesItsOwnCurrency() {
+        // Without this a client had nothing to go on but the transaction's currency, which is the
+        // sender's -- and the transaction page duly showed the dollar account's 119.40 as rupees.
+        TransactionResponse posted = sendRupees("10000.00", "fx-currency");
+
+        assertThat(posted.legs()).extracting(TransactionResponse.Leg::currency)
+                .containsExactly("INR", "INR", "USD", "USD");
+        assertThat(posted.legs().get(3).amount()).isEqualByComparingTo("119.40");
+    }
+
+    @Test
     @DisplayName("the bank's position moves by exactly what it bought and sold")
     void thePositionAccountsRecordTheTrade() {
         BigDecimal rupeesBefore = positionIn("INR");

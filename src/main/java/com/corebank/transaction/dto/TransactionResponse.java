@@ -55,6 +55,12 @@ public record TransactionResponse(
             String accountNumber,
             EntryDirection direction,
             BigDecimal amount,
+
+            @Schema(description = "The currency of this leg's amount and balance -- its account's. On a "
+                    + "cross-currency transfer two legs are in each currency, so the transaction's own "
+                    + "currency is not this one for half of them.")
+            String currency,
+
             BigDecimal balanceAfter) {
 
         static Leg from(LedgerEntry entry) {
@@ -63,6 +69,7 @@ public record TransactionResponse(
                     entry.getAccount().getAccountNumber(),
                     entry.getDirection(),
                     Money.normalize(entry.getAmount()),
+                    entry.getAccount().getCurrency(),
                     Money.normalize(entry.getBalanceAfter()));
         }
     }

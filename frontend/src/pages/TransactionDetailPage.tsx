@@ -1,4 +1,5 @@
 import { type FormEvent } from "react";
+import { fxSummary } from "../fx";
 import { postedBy } from "../attribution";
 import { Link, useParams } from "react-router-dom";
 import { useAuth } from "react-oidc-context";
@@ -42,6 +43,9 @@ export function TransactionDetailPage() {
             <div>{postedBy(transaction)}</div>
           </div>
         </div>
+        {fxSummary(transaction) && (
+          <p style={{ marginTop: "0.75rem" }}>Converted: {fxSummary(transaction)}</p>
+        )}
         {transaction.description && (
           <p className="muted" style={{ marginTop: "0.75rem" }}>{transaction.description}</p>
         )}
@@ -68,8 +72,10 @@ export function TransactionDetailPage() {
               <tr key={leg.accountId}>
                 <td>{leg.accountNumber}</td>
                 <td>{leg.direction}</td>
-                <td className="amount">{formatAmount(leg.amount, transaction.currency)}</td>
-                <td className="amount">{formatAmount(leg.balanceAfter, transaction.currency)}</td>
+                {/* Each leg in its own account's currency: on an FX transfer half the legs are not in the
+                    transaction's, and formatting them in it showed a dollar credit as rupees. */}
+                <td className="amount">{formatAmount(leg.amount, leg.currency)}</td>
+                <td className="amount">{formatAmount(leg.balanceAfter, leg.currency)}</td>
               </tr>
             ))}
           </tbody>

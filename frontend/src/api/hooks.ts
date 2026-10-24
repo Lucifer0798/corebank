@@ -7,6 +7,7 @@ import type {
   Balance,
   Customer,
   CustomerSearchHit,
+  FxQuote,
   Hold,
   IdentityLink,
   KycDecision,
@@ -333,6 +334,20 @@ export interface TransferInput {
   amount: number;
   currency?: string;
   description?: string;
+}
+
+/**
+ * What an amount would convert to, before anything is committed. An estimate: the rate is fixed when
+ * the transfer posts, not when this was asked.
+ */
+export function useFxQuote(from: string, to: string | undefined, amount: number, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["fxQuote", from, to, amount],
+    queryFn: () => api.get<FxQuote>("/fx/quote", { from, to, amount }),
+    enabled: enabled && Boolean(to) && amount > 0,
+    retry: false,
+  });
 }
 
 export function useTransfer() {

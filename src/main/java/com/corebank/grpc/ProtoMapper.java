@@ -71,6 +71,7 @@ final class ProtoMapper {
                     .setAccountNumber(text(leg.accountNumber()))
                     .setDirection(text(leg.direction()))
                     .setAmount(amount(leg.amount()))
+                    .setCurrency(text(leg.currency()))
                     .setBalanceAfter(amount(leg.balanceAfter()))
                     .build());
         }

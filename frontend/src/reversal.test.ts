@@ -20,6 +20,7 @@ function transaction(overrides: Partial<Transaction> = {}): Transaction {
     reversalOf: null,
     legs: [],
     initiatedBy: null,
+    fx: null,
     ...overrides,
   };
 }
