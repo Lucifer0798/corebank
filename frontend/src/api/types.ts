@@ -129,6 +129,8 @@ export interface TransactionLeg {
   accountNumber: string;
   direction: EntryDirection;
   amount: number;
+  /** This leg's own currency -- its account's. On an FX transfer, not the transaction's for half the legs. */
+  currency: string;
   balanceAfter: number;
 }
 
@@ -144,8 +146,23 @@ export interface Transaction {
   /** Set only on a REVERSAL: the reference of the posting it undoes. */
   reversalOf: string | null;
   legs: TransactionLeg[];
+  /** Set only on a cross-currency transfer: the rate applied and what the amount became. */
+  fx: { exchangeRate: number; counterAmount: number; counterCurrency: string } | null;
   /** Who made it: a member of staff, or `system:<job>`. Null on postings from before this was recorded. */
   initiatedBy: { subject: string; name: string | null } | null;
+}
+
+/** Mirrors com.corebank.fx.service.FxRateService.Quote. */
+export interface FxQuote {
+  fromCurrency: string;
+  toCurrency: string;
+  fromAmount: number;
+  toAmount: number;
+  /** After the bank's spread: what the transfer would actually use. */
+  rateApplied: number;
+  midRate: number;
+  spreadBps: number;
+  asOf: string;
 }
 
 export type ScheduleFrequency = "ONCE" | "DAILY" | "WEEKLY" | "MONTHLY";

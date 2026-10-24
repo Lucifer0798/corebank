@@ -80,6 +80,9 @@ message TransactionLeg {
   string direction = 3;
   string amount = 4;
   string balance_after = 5;
+  // The leg's own currency (its account's). On a cross-currency transfer half the legs are not in
+  // Transaction.currency. Added later, as a new field number, so older clients simply ignore it.
+  string currency = 6;
 }
 
 message Transaction {
