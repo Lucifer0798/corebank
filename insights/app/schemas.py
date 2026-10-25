@@ -14,14 +14,22 @@ from pydantic import BaseModel, Field
 
 class CategorySpend(BaseModel):
     category: str
-    spent: str = Field(description="Positive: how much left the account in this category")
+    currency: str
+    spent: str = Field(description="Positive: how much left the accounts in this category, in this currency")
     entries: int
 
 
-class SpendingSummary(BaseModel):
-    customer_id: str
+class CurrencyTotal(BaseModel):
     currency: str
-    total_spent: str
+    spent: str
+
+
+class SpendingSummary(BaseModel):
+    """One total per currency, never a single figure: a customer can hold accounts in several, and
+    a single total used to add them together and label the result INR."""
+
+    customer_id: str
+    totals: list[CurrencyTotal] = Field(description="Spend per currency, in currency-code order")
     categories: list[CategorySpend]
     accounts: list[str] = Field(description="Account numbers the summary was built from")
 

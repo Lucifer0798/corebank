@@ -40,14 +40,24 @@ public record TransactionPostedEvent(
          */
         Boolean replayed) {
 
-    public record Leg(String accountNumber, EntryDirection direction, BigDecimal amount, BigDecimal balanceAfter) {
+    /**
+     * One leg, in its own account's currency.
+     *
+     * <p>{@code currency} was added later and is null on older messages; every one of those was
+     * single-currency, so a consumer falls back to the transaction's. It matters on a cross-currency
+     * transfer, where half the legs are not in the transaction's currency -- without it the insights
+     * service stored a dollar account's credit as rupees.
+     */
+    public record Leg(String accountNumber, EntryDirection direction, BigDecimal amount, BigDecimal balanceAfter,
+                      String currency) {
 
         static Leg from(LedgerEntry entry) {
             return new Leg(
                     entry.getAccount().getAccountNumber(),
                     entry.getDirection(),
                     Money.normalize(entry.getAmount()),
-                    Money.normalize(entry.getBalanceAfter()));
+                    Money.normalize(entry.getBalanceAfter()),
+                    entry.getAccount().getCurrency());
         }
     }
 

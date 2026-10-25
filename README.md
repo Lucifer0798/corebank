@@ -1044,6 +1044,21 @@ confidence scores are low in absolute terms — with nine classes and a seed set
 them as a ranking signal rather than a calibrated probability. Training happens on first start if
 no model exists, so a fresh `docker compose up` needs no separate step.
 
+**Spending is totalled per currency, never across currencies.** A customer can hold accounts in
+several currencies, and the summary used to sum every account's spending by category and label
+the result INR. So 5,000 rupees and 100 dollars came out as "5,100.00 INR". It now groups by
+category *and* currency and returns one total per currency (`totals`) in place of the old
+`currency` and `total_spent`. The frontend card shows a total for each currency, and a breakdown
+whose bars are shares of that currency's own total.
+
+**Each leg is stored in its own currency.** The consumer used to stamp every leg with the
+transaction's currency, which is the sender's, so an INR→USD transfer stored the dollar account's
+credit as rupees. `TransactionPostedEvent.Leg` now carries `currency` (additive, like `status`).
+The consumer uses it, falling back to the transaction's currency for older messages, all of which
+were single-currency. To correct rows written before this, replay the affected period
+(`POST /api/v1/admin/outbox/replay/transactions`): the store upserts on (reference, account), so
+each row's currency is rewritten in place.
+
 ### gRPC
 
 A second, **read-only** surface on port `9091`, defined by

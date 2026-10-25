@@ -28,9 +28,9 @@ class TransactionSearchIndexerDocumentTest {
                 "TXN-20260401-AAAAAAAA", TransactionType.DEPOSIT, status,
                 new BigDecimal("250.00"), "INR", "Counter", Instant.parse("2026-04-01T10:00:00Z"),
                 List.of(new TransactionPostedEvent.Leg("GL0000000001", EntryDirection.DEBIT,
-                                new BigDecimal("250.00"), new BigDecimal("250.00")),
+                                new BigDecimal("250.00"), new BigDecimal("250.00"), "INR"),
                         new TransactionPostedEvent.Leg("100100000001", EntryDirection.CREDIT,
-                                new BigDecimal("250.00"), new BigDecimal("250.00"))),
+                                new BigDecimal("250.00"), new BigDecimal("250.00"), "INR")),
                 false);
     }
 

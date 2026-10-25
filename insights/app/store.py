@@ -109,7 +109,10 @@ class Store:
         )
 
     async def summary(self, account_numbers: list[str], since, until) -> list[asyncpg.Record]:
-        """Spending by category over the given accounts.
+        """Spending by category and currency over the given accounts.
+
+        Grouped by currency as well, because a customer can hold accounts in several, and adding
+        500 rupees to 10 dollars produces a number in no currency at all.
 
         Only outgoing legs count: a spending summary that included salary credits and incoming
         transfers as "spend" would be actively misleading. `spent` is returned positive because a
@@ -118,6 +121,7 @@ class Store:
         return await self._pool.fetch(
             """
             SELECT category,
+                   currency,
                    SUM(-signed_amount) AS spent,
                    COUNT(*)            AS entries
               FROM categorised_entry
@@ -125,8 +129,8 @@ class Store:
                AND signed_amount < 0
                AND ($2::timestamptz IS NULL OR posted_at >= $2)
                AND ($3::timestamptz IS NULL OR posted_at <= $3)
-             GROUP BY category
-             ORDER BY spent DESC
+             GROUP BY category, currency
+             ORDER BY currency, spent DESC
             """,
             account_numbers, since, until,
         )

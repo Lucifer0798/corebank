@@ -1,4 +1,5 @@
 import { useRecentEntries, useSpendingSummary } from "../api/insightsHooks";
+import type { CategorySpend } from "../api/insightsTypes";
 import { formatAmount, formatDateTime } from "../format";
 import { ErrorBanner } from "./ErrorBanner";
 
@@ -25,19 +26,29 @@ export function SpendingInsights({ customerId }: { customerId: string }) {
 
       {summary && summary.accounts.length > 0 && (
         <>
+          {/* One total per currency. A single figure used to add a dollar account's spending to a
+              rupee account's and call the sum rupees. */}
           <div className="stat-grid" style={{ marginBottom: "1rem" }}>
-            <div className="stat">
-              <div className="stat__label">Total spent</div>
-              <div className="stat__value">
-                {formatAmount(Number(summary.total_spent), summary.currency)}
+            {summary.totals.map((total) => (
+              <div className="stat" key={total.currency}>
+                <div className="stat__label">Total spent ({total.currency})</div>
+                <div className="stat__value">{formatAmount(Number(total.spent), total.currency)}</div>
               </div>
-            </div>
+            ))}
           </div>
 
           {summary.categories.length === 0 ? (
             <p className="muted">No spending recorded yet.</p>
           ) : (
-            <CategoryBreakdown summary={summary} />
+            summary.totals.map((total) => (
+              <CategoryBreakdown
+                key={total.currency}
+                currency={total.currency}
+                total={Number(total.spent)}
+                categories={summary.categories.filter((c) => c.currency === total.currency)}
+                labelled={summary.totals.length > 1}
+              />
+            ))
           )}
         </>
       )}
@@ -77,25 +88,28 @@ export function SpendingInsights({ customerId }: { customerId: string }) {
   );
 }
 
-function CategoryBreakdown({
-  summary,
-}: {
-  summary: { currency: string; total_spent: string; categories: { category: string; spent: string; entries: number }[] };
+/** One currency's categories, each bar a share of that currency's own total. */
+function CategoryBreakdown({ currency, total, categories, labelled }: {
+  currency: string;
+  total: number;
+  categories: CategorySpend[];
+  labelled: boolean;
 }) {
-  const total = Number(summary.total_spent) || 1;
+  const denominator = total || 1;
   return (
     <div className="category-breakdown">
-      {summary.categories
+      {labelled && <h4 className="muted">{currency}</h4>}
+      {categories
         .slice()
         .sort((a, b) => Number(b.spent) - Number(a.spent))
         .map((category) => {
-          const share = Math.min(100, (Number(category.spent) / total) * 100);
+          const share = Math.min(100, (Number(category.spent) / denominator) * 100);
           return (
-            <div className="category-row" key={category.category}>
+            <div className="category-row" key={category.category + category.currency}>
               <div className="category-row__label">
                 <span>{category.category}</span>
                 <span className="muted">
-                  {formatAmount(Number(category.spent), summary.currency)} &middot; {category.entries}{" "}
+                  {formatAmount(Number(category.spent), category.currency)} &middot; {category.entries}{" "}
                   {category.entries === 1 ? "entry" : "entries"}
                 </span>
               </div>

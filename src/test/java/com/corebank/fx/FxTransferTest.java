@@ -35,7 +35,14 @@ import org.springframework.boot.test.context.SpringBootTest;
  * position accounts are where that shows up.
  */
 @SpringBootTest
+@org.springframework.test.context.event.RecordApplicationEvents
 class FxTransferTest {
+
+    @Autowired
+    private org.springframework.test.context.event.ApplicationEvents events;
+
+    @Autowired
+    private tools.jackson.databind.ObjectMapper objectMapper;
 
     private static final AtomicInteger UNIQUE = new AtomicInteger();
 
@@ -116,6 +123,27 @@ class FxTransferTest {
         assertThat(posted.legs().get(2).accountNumber()).isEqualTo("GL0000000011");
         assertThat(posted.legs().get(2).direction().name()).isEqualTo("DEBIT");
         assertThat(posted.legs().get(3).direction().name()).isEqualTo("CREDIT");
+    }
+
+    @Test
+    @DisplayName("the event downstream consumers receive carries each leg's currency too")
+    void theEventCarriesLegCurrencies() {
+        // What Kafka consumers -- search, spending insights, notifications -- are actually sent.
+        // Without it the insights service stamped every leg with the transaction's currency and
+        // stored the dollar account's credit as rupees.
+        events.clear();
+        sendRupees("10000.00", "fx-event-currency");
+
+        com.corebank.transaction.messaging.TransactionPostedEvent published =
+                events.stream(com.corebank.transaction.messaging.TransactionPostedEvent.class).findFirst().orElseThrow();
+        assertThat(published.legs()).extracting(com.corebank.transaction.messaging.TransactionPostedEvent.Leg::currency)
+                .containsExactly("INR", "INR", "USD", "USD");
+
+        // On the wire under the key the insights consumer reads (leg.get("currency")), serialised by
+        // the same mapper the outbox writer uses.
+        String json = objectMapper.writeValueAsString(published);
+        assertThat(com.jayway.jsonpath.JsonPath.<java.util.List<String>>read(json, "$.legs[*].currency"))
+                .containsExactly("INR", "INR", "USD", "USD");
     }
 
     @Test

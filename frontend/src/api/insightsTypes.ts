@@ -5,14 +5,20 @@
 
 export interface CategorySpend {
   category: string;
+  currency: string;
   spent: string;
   entries: number;
 }
 
+export interface CurrencyTotal {
+  currency: string;
+  spent: string;
+}
+
+/** One total per currency, never a single figure: adding rupees to dollars is a number in neither. */
 export interface SpendingSummary {
   customer_id: string;
-  currency: string;
-  total_spent: string;
+  totals: CurrencyTotal[];
   categories: CategorySpend[];
   accounts: string[];
 }

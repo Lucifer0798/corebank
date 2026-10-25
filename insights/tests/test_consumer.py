@@ -144,3 +144,34 @@ class TestHandle:
 
         assert categoriser.calls == [None]
         assert store.upserts[0]["description"] is None
+
+    async def test_each_leg_is_stored_in_its_own_currency(self, consumer):
+        # An INR->USD transfer: the transaction's currency is the sender's. Stamping every leg with
+        # it recorded the dollar account's credit as rupees.
+        transaction_consumer, store, _ = consumer
+        await transaction_consumer._handle({
+            "reference": "TXN-FX", "type": "TRANSFER", "amount": "10000.00", "currency": "INR",
+            "description": "to USD", "postedAt": "2026-10-25T10:00:00Z",
+            "legs": [
+                {"accountNumber": "100100000001", "direction": "DEBIT", "amount": "10000.00",
+                 "currency": "INR", "balanceAfter": "0.00"},
+                {"accountNumber": "GL0000000010", "direction": "CREDIT", "amount": "10000.00",
+                 "currency": "INR", "balanceAfter": "0.00"},
+                {"accountNumber": "GL0000000011", "direction": "DEBIT", "amount": "119.40",
+                 "currency": "USD", "balanceAfter": "0.00"},
+                {"accountNumber": "100100000002", "direction": "CREDIT", "amount": "119.40",
+                 "currency": "USD", "balanceAfter": "119.40"},
+            ],
+        })
+
+        by_account = {row["account_number"]: row["currency"] for row in store.upserts}
+        assert by_account == {"100100000001": "INR", "100100000002": "USD"}
+
+    async def test_a_leg_without_a_currency_falls_back_to_the_transactions(self, consumer):
+        # Messages from before legs carried a currency. Every one of those was single-currency --
+        # cross-currency transfers were the reason the field was added -- so the transaction's own
+        # currency is right for them.
+        transaction_consumer, store, _ = consumer
+        await transaction_consumer._handle(_deposit_event())
+
+        assert store.upserts[0]["currency"] == "INR"
