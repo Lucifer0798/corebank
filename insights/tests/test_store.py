@@ -152,6 +152,24 @@ class TestSummary:
         assert rows[0]["spent"] == 250
         assert rows[0]["entries"] == 2
 
+    async def test_currencies_are_never_added_together(self, store):
+        # One customer, a rupee account and a dollar account, both spending on dining. Summing
+        # 500 rupees and 10 dollars into "510" is a number in no currency at all.
+        posted_at = datetime.now(timezone.utc)
+        await store.upsert_entry(
+            reference="TXN-INR", account_number="A6", direction="DEBIT", signed_amount="-500.00",
+            currency="INR", description="swiggy", category="DINING", confidence=0.8, posted_at=posted_at,
+        )
+        await store.upsert_entry(
+            reference="TXN-USD", account_number="A7", direction="DEBIT", signed_amount="-10.00",
+            currency="USD", description="starbucks", category="DINING", confidence=0.8, posted_at=posted_at,
+        )
+
+        rows = await store.summary(["A6", "A7"], since=None, until=None)
+        assert {(r["category"], r["currency"]): r["spent"] for r in rows} == {
+            ("DINING", "INR"): 500, ("DINING", "USD"): 10,
+        }
+
     async def test_since_and_until_bound_the_window(self, store):
         old = datetime(2020, 1, 1, tzinfo=timezone.utc)
         recent = datetime.now(timezone.utc)

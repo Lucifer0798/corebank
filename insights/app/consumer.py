@@ -92,7 +92,10 @@ class TransactionConsumer:
     async def _handle(self, event: dict) -> None:
         reference = event["reference"]
         description = event.get("description")
-        currency = event.get("currency", "INR")
+        # The transaction's currency is the sender's. Each leg is in its own account's currency, which
+        # on a cross-currency transfer is not that for half the legs; the fallback is for messages
+        # from before legs carried one, all of which were single-currency.
+        transaction_currency = event.get("currency", "INR")
         posted_at = datetime.fromisoformat(event["postedAt"].replace("Z", "+00:00"))
         category, confidence = self._categoriser.categorise(description)
 
@@ -105,7 +108,7 @@ class TransactionConsumer:
                 account_number=account_number,
                 direction=leg["direction"],
                 signed_amount=str(_signed_amount(leg["direction"], str(leg["amount"]))),
-                currency=currency,
+                currency=leg.get("currency") or transaction_currency,
                 description=description,
                 category=category,
                 confidence=confidence,

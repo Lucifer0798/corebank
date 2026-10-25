@@ -138,14 +138,14 @@ class TestCustomerSummary:
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["total_spent"] == "0.00"
+        assert body["totals"] == []
         assert body["categories"] == []
         assert store.summary_calls == []  # Never reached the aggregate query.
 
     def test_aggregates_and_totals_the_categories(self, client, wire_state, as_teller):
         store = _FakeStore(summary_rows=[
-            {"category": "RENT", "spent": 18000, "entries": 1},
-            {"category": "DINING", "spent": 850, "entries": 1},
+            {"category": "RENT", "currency": "INR", "spent": 18000, "entries": 1},
+            {"category": "DINING", "currency": "INR", "spent": 850, "entries": 1},
         ])
         wire_state(store=store, corebank=_FakeCoreBank(accounts=["100100000001"]))
 
@@ -155,11 +155,34 @@ class TestCustomerSummary:
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["total_spent"] == "18850.00"
+        assert body["totals"] == [{"currency": "INR", "spent": "18850.00"}]
         assert body["accounts"] == ["100100000001"]
         assert {c["category"]: c["spent"] for c in body["categories"]} == {
             "RENT": "18000.00", "DINING": "850.00"
         }
+
+    def test_each_currency_gets_its_own_total(self, client, wire_state, as_teller):
+        # A rupee and a dollar account. One total labelled INR was what this returned: 500 rupees and
+        # 10 dollars reported as "510.00 INR".
+        store = _FakeStore(summary_rows=[
+            {"category": "DINING", "currency": "INR", "spent": 500, "entries": 3},
+            {"category": "DINING", "currency": "USD", "spent": 10, "entries": 1},
+            {"category": "SHOPPING", "currency": "USD", "spent": 25, "entries": 1},
+        ])
+        wire_state(store=store, corebank=_FakeCoreBank(accounts=["100100000001", "100100000002"]))
+
+        body = client.get(
+            "/api/v1/insights/customers/cust-1/summary",
+            headers={"Authorization": "Bearer x"},
+        ).json()
+
+        assert body["totals"] == [
+            {"currency": "INR", "spent": "500.00"},
+            {"currency": "USD", "spent": "35.00"},
+        ]
+        assert [(c["category"], c["currency"], c["spent"]) for c in body["categories"]] == [
+            ("DINING", "INR", "500.00"), ("DINING", "USD", "10.00"), ("SHOPPING", "USD", "25.00"),
+        ]
 
     def test_forwards_the_callers_own_token_to_corebank(self, client, wire_state, as_teller):
         # as_teller overrides current_principal entirely, so the request's own Authorization

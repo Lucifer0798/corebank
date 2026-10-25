@@ -24,6 +24,7 @@ from .model import Categoriser
 from .schemas import (
     CategorisePreview,
     CategorySpend,
+    CurrencyTotal,
     HealthResponse,
     RecentEntry,
     SpendingSummary,
@@ -117,19 +118,22 @@ async def customer_summary(
     """
     account_numbers = await _corebank().account_numbers_for(customer_id, principal.token)
     if not account_numbers:
-        return SpendingSummary(customer_id=customer_id, currency="INR", total_spent="0.00",
-                               categories=[], accounts=[])
+        return SpendingSummary(customer_id=customer_id, totals=[], categories=[], accounts=[])
 
     rows = await _store().summary(account_numbers, since, until)
     categories = [
-        CategorySpend(category=r["category"], spent=f"{r['spent']:.2f}", entries=r["entries"])
+        CategorySpend(category=r["category"], currency=r["currency"], spent=f"{r['spent']:.2f}",
+                      entries=r["entries"])
         for r in rows
     ]
-    total = sum((r["spent"] for r in rows), start=0)
+    by_currency: dict[str, object] = {}
+    for r in rows:
+        by_currency[r["currency"]] = by_currency.get(r["currency"], 0) + r["spent"]
+    totals = [CurrencyTotal(currency=currency, spent=f"{spent:.2f}")
+              for currency, spent in sorted(by_currency.items())]
     return SpendingSummary(
         customer_id=customer_id,
-        currency="INR",
-        total_spent=f"{total:.2f}",
+        totals=totals,
         categories=categories,
         accounts=account_numbers,
     )
