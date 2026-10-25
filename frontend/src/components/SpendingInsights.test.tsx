@@ -31,9 +31,11 @@ describe("SpendingInsights", () => {
       accounts: ["100100000001", "100100000002"],
     });
 
-    render(<SpendingInsights customerId="c1" />);
+    const { container } = render(<SpendingInsights customerId="c1" />);
 
     expect(screen.getByText("Total spent (INR)")).toBeTruthy();
+    // Three category rows, not six: each currency's breakdown lists only that currency's categories.
+    expect(container.querySelectorAll(".category-row")).toHaveLength(3);
     expect(screen.getByText("Total spent (USD)")).toBeTruthy();
     // The two currencies are never combined into one figure anywhere on the card.
     expect(screen.queryByText(/535/)).toBeNull();
