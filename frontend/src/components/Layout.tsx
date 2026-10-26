@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "react-oidc-context";
-import { rolesFromAccessToken, isStaff } from "../auth/roles";
+import { isAdmin, rolesFromAccessToken, isStaff } from "../auth/roles";
 
 export function Layout() {
   const auth = useAuth();
@@ -22,6 +22,11 @@ export function Layout() {
                 <NavLink to="/search" className={({ isActive }) => (isActive ? "active" : "")}>
                   Search
                 </NavLink>
+                {isAdmin(roles) && (
+                  <NavLink to="/admin" className={({ isActive }) => (isActive ? "active" : "")}>
+                    Admin
+                  </NavLink>
+                )}
               </>
             ) : (
               <NavLink to="/my-accounts" className={({ isActive }) => (isActive ? "active" : "")}>

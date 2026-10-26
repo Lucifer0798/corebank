@@ -504,6 +504,19 @@ class CoreBankApiIntegrationTest {
     }
 
     @Test
+    @Order(27)
+    @DisplayName("a replay accepts instants in the form the admin screen sends them")
+    void outboxReplayAcceptsBrowserInstants() throws Exception {
+        // The admin page builds its window with JavaScript's Date.toISOString(), which always
+        // includes milliseconds -- "1970-01-01T00:00:00.000Z" -- unlike the hand-written ones above.
+        mockMvc.perform(post("/api/v1/admin/outbox/replay/transactions").with(admin())
+                        .param("since", "1970-01-01T00:00:00.000Z")
+                        .param("until", "2030-01-01T00:00:00.000Z"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.eventsEnqueued").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
+    }
+
+    @Test
     @Order(28)
     @DisplayName("a replay window where 'until' is not after 'since' is refused")
     void outboxReplayRejectsAnInvalidWindow() throws Exception {

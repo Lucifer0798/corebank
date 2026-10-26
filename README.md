@@ -906,6 +906,11 @@ to detect or repair it. The outbox row is a durable, retriable record of "this s
 sending," so a broker outage now delays delivery instead of losing the event: nothing is
 acknowledged to Kafka before it is safely on disk in the same transaction as the change itself.
 
+The frontend's **Admin** page (admins only, `/admin`) runs both replays without a hand-built API
+call. Pick a window in local time, or a preset (last 24 hours, last 30 days, everything), and it
+reports how many events were re-sent. "Everything" runs from the epoch to a minute past now,
+since the window's end is exclusive; that is the replay #39 and #51 call for.
+
 Two ADMIN-only endpoints repair a gap after the fact — a window predating the outbox, or one this
 application's own monitoring missed for some other reason — by re-deriving the event from the
 ledger/customer tables and writing it through the exact same outbox path a live request uses:
