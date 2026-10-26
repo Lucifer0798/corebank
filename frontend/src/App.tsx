@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { AdminPage } from "./pages/AdminPage";
 import { useAuth } from "react-oidc-context";
 import { AuthGate } from "./components/AuthGate";
 import { Layout } from "./components/Layout";
@@ -28,6 +29,7 @@ function App() {
           <Route path="/my-accounts" element={<MyAccountsPage />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/transactions/:reference" element={<TransactionDetailPage />} />
+          <Route path="/admin" element={<AdminPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

@@ -280,6 +280,23 @@ export function useReleaseHold() {
   });
 }
 
+export type ReplayKind = "transactions" | "customers";
+
+/**
+ * Re-sends events for a window through the outbox, so search and spending insights rebuild from the
+ * ledger. Admin only. Safe to repeat: every consumer upserts by key rather than appending.
+ */
+export function useReplay(kind: ReplayKind) {
+  const api = useApi();
+  return useMutation({
+    mutationFn: (window: { since: string; until: string }) =>
+      apiFetch<{ eventsEnqueued: number }>(`/admin/outbox/replay/${kind}`, api.token, {
+        method: "POST",
+        params: window,
+      }),
+  });
+}
+
 /** Every freeze, unfreeze and closure of an account, newest first. Staff only. */
 export function useAccountStatusChanges(accountId: string, page: number) {
   const api = useApi();
