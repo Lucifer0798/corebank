@@ -362,6 +362,12 @@ is worth.
 Revaluation is an explicit admin action rather than a scheduled job. A close is an operational
 decision about a point in time, not something that should happen on a timer.
 
+The Admin page shows the book: each currency's position, marking a short one, its mid rate and its
+value in the reporting currency, then the current mark, what the book is carried at, and the gain or
+loss a close would recognise. Its **Revalue** button runs the close and links the posting it made,
+or says there was nothing to do: a second close in a row posts nothing, which is a normal result,
+not an error.
+
 The seeded cross-rates are not mutually consistent, which is tolerable only while the spread covers
 it — otherwise a customer could mint money cycling between their own accounts. A test asserts that
 every round trip *and* every triangle loses money, so an edited rate that broke that would fail the
