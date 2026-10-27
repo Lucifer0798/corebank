@@ -152,6 +152,29 @@ export interface Transaction {
   initiatedBy: { subject: string; name: string | null } | null;
 }
 
+/** Mirrors com.corebank.fx.dto.FxPositionReport. */
+export interface FxPositionReport {
+  reportingCurrency: string;
+  positions: {
+    currency: string;
+    accountNumber: string;
+    /** In its own currency. Negative means the bank is short. */
+    balance: number;
+    rateToReporting: number;
+    valueInReportingCurrency: number;
+  }[];
+  markToMarket: number;
+  markCarried: number;
+  asOf: string;
+}
+
+/** Mirrors FxController.RevaluationResponse. */
+export interface RevaluationResult {
+  /** The posting a close produced; null when the mark had not moved. */
+  reference: string | null;
+  markCarried: number;
+}
+
 /** Mirrors com.corebank.fx.service.FxRateService.Quote. */
 export interface FxQuote {
   fromCurrency: string;

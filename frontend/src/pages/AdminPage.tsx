@@ -3,6 +3,7 @@ import { useAuth } from "react-oidc-context";
 import { useReplay, type ReplayKind } from "../api/hooks";
 import { isAdmin, rolesFromAccessToken } from "../auth/roles";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { FxBookCard } from "../components/FxBookCard";
 import { formatDateTime } from "../format";
 import { preset, replayWindow } from "../replayWindow";
 
@@ -41,6 +42,7 @@ export function AdminPage() {
           </p>
         </div>
       </div>
+      <FxBookCard />
       <ReplayCard kind="transactions" />
       <ReplayCard kind="customers" />
     </>

@@ -7,6 +7,7 @@ import type {
   Balance,
   Customer,
   CustomerSearchHit,
+  FxPositionReport,
   FxQuote,
   Hold,
   IdentityLink,
@@ -14,6 +15,7 @@ import type {
   KycStatus,
   Notification,
   PagedResponse,
+  RevaluationResult,
   ScheduleFrequency,
   ScheduledTransfer,
   ScheduledTransferEvent,
@@ -277,6 +279,25 @@ export function useReleaseHold() {
   return useMutation({
     mutationFn: (reference: string) => api.post<Hold>(`/holds/${reference}/release`),
     onSuccess: (hold) => invalidateAfterHold(queryClient, hold),
+  });
+}
+
+/** The bank's own FX book. Admin only. */
+export function useFxPosition() {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["fxPosition"],
+    queryFn: () => api.get<FxPositionReport>("/fx/position"),
+  });
+}
+
+/** Marks the book to market. Admin only; harmless to repeat -- a second close posts nothing. */
+export function useRevalue() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<RevaluationResult>("/fx/revalue"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fxPosition"] }),
   });
 }
 
