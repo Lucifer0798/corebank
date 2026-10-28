@@ -380,8 +380,12 @@ public class TransactionService {
      * refused on any non-rupee account ("held in USD, not INR") -- the frontend did exactly that
      * until #50. The account's own currency is the only reading of "none given" that is ever right.
      * A currency that is given and wrong is still refused, by the account's own currency check.
+     *
+     * <p>Read as a bare column, never by loading the account: the row lock that follows would hand
+     * that unlocked copy straight back, and two postings racing on one account would then fail the
+     * version check instead of queueing on the lock.
      */
     private String currencyOf(String requested, UUID accountId) {
-        return requested != null ? requested : accountService.require(accountId).getCurrency();
+        return requested != null ? requested : accountService.currencyOf(accountId);
     }
 }

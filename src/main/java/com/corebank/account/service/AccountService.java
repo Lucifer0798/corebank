@@ -218,6 +218,16 @@ public class AccountService {
                 .orElseThrow(() -> new ResourceNotFoundException("Account", accountId));
     }
 
+    /**
+     * An account's currency, read without loading the account -- safe ahead of
+     * {@link #requireForUpdate} in the same transaction, where {@link #require} is not.
+     */
+    @Transactional(readOnly = true)
+    public String currencyOf(UUID accountId) {
+        return accounts.findCurrencyById(accountId)
+                .orElseThrow(() -> new ResourceNotFoundException("Account", accountId));
+    }
+
     /** Loads an account with a row lock; used by every path that moves money. */
     public Account requireForUpdate(UUID accountId) {
         return accounts.findByIdForUpdate(accountId)

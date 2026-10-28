@@ -115,7 +115,7 @@ public class ScheduledTransferService {
 
         // Omitted means the paying account's currency, not rupees -- see TransactionService.currencyOf.
         String currency = request.currency() == null
-                ? accountService.require(request.sourceAccountId()).getCurrency()
+                ? accountService.currencyOf(request.sourceAccountId())
                 : request.currency();
         lockPostableCustomerAccounts(request.sourceAccountId(), request.destinationAccountId(), currency);
 
