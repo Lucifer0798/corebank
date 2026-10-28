@@ -113,7 +113,10 @@ public class ScheduledTransferService {
                     "The end of the schedule must not be before its start");
         }
 
-        String currency = request.currency() == null ? Money.BASE_CURRENCY : request.currency();
+        // Omitted means the paying account's currency, not rupees -- see TransactionService.currencyOf.
+        String currency = request.currency() == null
+                ? accountService.currencyOf(request.sourceAccountId())
+                : request.currency();
         lockPostableCustomerAccounts(request.sourceAccountId(), request.destinationAccountId(), currency);
 
         ScheduledTransfer schedule = new ScheduledTransfer();

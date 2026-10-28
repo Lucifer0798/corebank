@@ -30,6 +30,17 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     @Query("select a from Account a where a.id = :id")
     Optional<Account> findByIdForUpdate(@Param("id") UUID id);
 
+    /**
+     * An account's currency, without loading the account.
+     *
+     * <p>A scalar on purpose. A posting that loaded the entity unlocked before
+     * {@link #findByIdForUpdate} would get that same stale instance back from the lock -- the
+     * persistence context hands out the copy it already holds -- and its version check would then
+     * refuse the posting whenever another one had landed in between.
+     */
+    @Query("select a.currency from Account a where a.id = :id")
+    Optional<String> findCurrencyById(@Param("id") UUID id);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from Account a where a.accountNumber = :accountNumber")
     Optional<Account> findByAccountNumberForUpdate(@Param("accountNumber") String accountNumber);

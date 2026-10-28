@@ -391,9 +391,23 @@ comes from `GET /fx/quote`, which nothing had ever called. It is an estimate: th
 the transfer posts.
 
 **The money-movement form now sends the account's own currency.** It used to send none, and the
-backend defaults a missing currency to rupees, so every deposit, withdrawal and transfer on a
+backend defaulted a missing currency to rupees, so every deposit, withdrawal and transfer on a
 dollar or euro account was refused with "held in USD, not INR". A probe confirmed it before the
 fix.
+
+**An omitted currency now means the account's own.** Fixing the form left the trap in the API for
+every other client: scripts, the load test, integrations. Deposits, withdrawals, transfers, holds and
+standing orders now read a missing `currency` as the account's currency, and for a transfer or a
+standing order that is the paying account's. A currency that is *named* and wrong is still refused
+with `CURRENCY_MISMATCH`, because naming rupees for a dollar account is a mistake worth reporting,
+not one to quietly correct. Opening an account still defaults to rupees; there is no account yet to
+take a currency from.
+
+The currency is looked up as a bare column, never by loading the account. The first version loaded
+it, and the concurrency test caught what that does: the row lock taken next hands back the copy
+already loaded, so of fifteen simultaneous deposits some failed the version check with a 409 instead
+of waiting their turn. No money was lost, since the version column refused the stale write, but the
+deposits were turned away.
 
 ### Internal accounts exist per currency
 

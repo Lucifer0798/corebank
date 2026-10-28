@@ -78,9 +78,10 @@ public class HoldService {
     @Transactional
     public HoldResponse place(UUID accountId, PlaceHoldRequest request) {
         BigDecimal amount = Money.normalize(request.amount());
-        String currency = request.currency() == null ? Money.BASE_CURRENCY : request.currency();
 
         Account account = accountService.requireForUpdate(accountId);
+        // Omitted means the account's own currency, not rupees -- see TransactionService.currencyOf.
+        String currency = request.currency() == null ? account.getCurrency() : request.currency();
         if (!account.isCustomerAccount()) {
             throw new BusinessRuleException("INTERNAL_ACCOUNT",
                     "General-ledger accounts cannot be used through this endpoint");
