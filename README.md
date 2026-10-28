@@ -403,6 +403,12 @@ with `CURRENCY_MISMATCH`, because naming rupees for a dollar account is a mistak
 not one to quietly correct. Opening an account still defaults to rupees; there is no account yet to
 take a currency from.
 
+The currency is looked up as a bare column, never by loading the account. The first version loaded
+it, and the concurrency test caught what that does: the row lock taken next hands back the copy
+already loaded, so of fifteen simultaneous deposits some failed the version check with a 409 instead
+of waiting their turn. No money was lost, since the version column refused the stale write, but the
+deposits were turned away.
+
 ### Internal accounts exist per currency
 
 Every posting that touches an internal account looks it up by **type and currency** —
