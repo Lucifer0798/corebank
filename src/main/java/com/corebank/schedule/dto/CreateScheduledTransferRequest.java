@@ -20,7 +20,7 @@ public record CreateScheduledTransferRequest(
         @PositiveAmount
         BigDecimal amount,
 
-        @Schema(example = "INR", defaultValue = "INR")
+        @Schema(example = "INR", description = "Defaults to the paying account's currency")
         @IsoCurrencyCode
         String currency,
 

@@ -15,7 +15,7 @@ public record PlaceHoldRequest(
         @PositiveAmount
         BigDecimal amount,
 
-        @Schema(example = "INR", defaultValue = "INR")
+        @Schema(example = "INR", description = "Defaults to the account's own currency")
         @IsoCurrencyCode
         String currency,
 

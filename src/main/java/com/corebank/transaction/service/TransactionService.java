@@ -76,7 +76,7 @@ public class TransactionService {
     @Transactional
     public TransactionResponse deposit(UUID accountId, AmountRequest request, String idempotencyKey) {
         BigDecimal amount = Money.normalize(request.amount());
-        String currency = currencyOf(request.currency());
+        String currency = currencyOf(request.currency(), accountId);
 
         Account account = customerAccountForUpdate(accountId, currency);
         // In the account's own currency. A rupee cash leg against a dollar account cannot
@@ -111,7 +111,7 @@ public class TransactionService {
     public TransactionResponse withdraw(UUID accountId, AmountRequest request, String idempotencyKey,
                                         boolean enforceVelocityLimit) {
         BigDecimal amount = Money.normalize(request.amount());
-        String currency = currencyOf(request.currency());
+        String currency = currencyOf(request.currency(), accountId);
 
         if (enforceVelocityLimit) {
             velocityLimits.assertWithin(accountId, currency, amount);
@@ -141,7 +141,8 @@ public class TransactionService {
                     "The source and destination accounts must differ");
         }
         BigDecimal amount = Money.normalize(request.amount());
-        String currency = currencyOf(request.currency());
+        // A transfer is denominated in the paying account's currency; the other side is converted.
+        String currency = currencyOf(request.currency(), request.sourceAccountId());
 
         // Checked against the paying side only. The money leaving is what a velocity control is
         // about; an account receiving an unusual amount is a different concern with different
@@ -372,7 +373,15 @@ public class TransactionService {
         return account;
     }
 
-    private String currencyOf(String requested) {
-        return requested == null ? Money.BASE_CURRENCY : requested;
+    /**
+     * The currency a request is in: the one it names, else its account's own.
+     *
+     * <p>Omitted used to mean rupees, so every deposit, withdrawal and transfer that left it out was
+     * refused on any non-rupee account ("held in USD, not INR") -- the frontend did exactly that
+     * until #50. The account's own currency is the only reading of "none given" that is ever right.
+     * A currency that is given and wrong is still refused, by the account's own currency check.
+     */
+    private String currencyOf(String requested, UUID accountId) {
+        return requested != null ? requested : accountService.require(accountId).getCurrency();
     }
 }

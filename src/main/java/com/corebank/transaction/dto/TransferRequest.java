@@ -17,7 +17,7 @@ public record TransferRequest(
         @PositiveAmount
         BigDecimal amount,
 
-        @Schema(example = "INR", defaultValue = "INR")
+        @Schema(example = "INR", description = "Defaults to the paying account's currency; the other side is converted")
         @IsoCurrencyCode
         String currency,
 
