@@ -113,11 +113,14 @@ public class TransactionService {
         BigDecimal amount = Money.normalize(request.amount());
         String currency = currencyOf(request.currency(), accountId);
 
+        Account account = customerAccountForUpdate(accountId, currency);
+        // Under the row lock, never ahead of it. The limit sums what has been debited today, and
+        // checked before the lock, simultaneous withdrawals each summed the same total, all passed,
+        // and then posted one after another -- three of 90,000 against a daily 200,000 all went
+        // through. Holding the lock, each one waits for the last to commit and counts it.
         if (enforceVelocityLimit) {
             velocityLimits.assertWithin(accountId, currency, amount);
         }
-
-        Account account = customerAccountForUpdate(accountId, currency);
         account.assertCanSendMoney();
         // In the account's own currency. A rupee cash leg against a dollar account cannot
         // balance, which is the bug V12 fixes -- see AccountService.internalAccount.
@@ -144,11 +147,6 @@ public class TransactionService {
         // A transfer is denominated in the paying account's currency; the other side is converted.
         String currency = currencyOf(request.currency(), request.sourceAccountId());
 
-        // Checked against the paying side only. The money leaving is what a velocity control is
-        // about; an account receiving an unusual amount is a different concern with different
-        // rules, and applying this one to it would refuse a customer their own salary.
-        velocityLimits.assertWithin(request.sourceAccountId(), currency, amount);
-
         // Take both row locks in a stable order regardless of transfer direction, so that a
         // simultaneous transfer the other way waits rather than deadlocking.
         List<UUID> lockOrder = List.of(request.sourceAccountId(), request.destinationAccountId())
@@ -156,6 +154,13 @@ public class TransactionService {
                 .sorted(Comparator.comparing(UUID::toString))
                 .toList();
         lockOrder.forEach(accountService::requireForUpdate);
+
+        // Checked against the paying side only. The money leaving is what a velocity control is
+        // about; an account receiving an unusual amount is a different concern with different
+        // rules, and applying this one to it would refuse a customer their own salary. After the
+        // locks for the same reason as a withdrawal's: ahead of them, simultaneous transfers each
+        // counted the same day's total and together went past it.
+        velocityLimits.assertWithin(request.sourceAccountId(), currency, amount);
 
         Account source = customerAccountForUpdate(request.sourceAccountId(), currency);
         // The paying side only: a transfer into a restricted customer's account still lands.

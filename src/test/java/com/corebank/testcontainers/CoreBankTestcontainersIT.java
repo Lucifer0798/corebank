@@ -185,6 +185,12 @@ class CoreBankTestcontainersIT {
         // off entirely, since that suite has no real broker for it to reach. This one does.
         registry.add("corebank.outbox.relay-enabled", () -> "true");
 
+        // The production limits rather than the mocked-JWT suite's generous ones, so that
+        // simultaneousDebitsDoNotOutrunTheDailyLimit races against the real ceiling. Every other
+        // test here moves a few hundred rupees at most.
+        registry.add("corebank.limits.daily-debit-limit", () -> "200000.00");
+        registry.add("corebank.limits.single-transaction-limit", () -> "100000.00");
+
         // A fixed port rather than 0: Spring gRPC exposes no @LocalServerPort equivalent to read
         // a randomly-bound one back from, so the test has to know the number in advance. Well
         // outside the range compose.yaml and the app's own defaults use, to avoid colliding with
@@ -736,6 +742,102 @@ class CoreBankTestcontainersIT {
                 .get("/accounts/{id}/balance", accountId)
                 .then().statusCode(200)
                 .body("balance", equalTo(expectedBalance.floatValue()));
+    }
+
+    @Test
+    @Order(11)
+    @DisplayName("simultaneous withdrawals and transfers cannot go past the daily debit limit together")
+    void simultaneousDebitsDoNotOutrunTheDailyLimit() throws Exception {
+        // The daily ceiling is 200,000 and one posting may be at most 100,000, so of three debits of
+        // 90,000 the third must be refused. The limit sums what was debited today, and if it does so
+        // before the account is locked, three requests that arrive together all read the same zero,
+        // all pass, and then queue on the lock and all post -- 270,000 out in a day. Withdrawals and
+        // transfers each check it separately, so each gets its own race.
+        BigDecimal each = new BigDecimal("90000.00");
+
+        String withdrawFrom = fundedAccount(new BigDecimal("300000.00"));
+        List<Integer> withdrawals = race(3, i -> given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", "tc-velocity-withdraw-" + UUID.randomUUID())
+                .contentType(ContentType.JSON)
+                .body(Map.of("amount", each))
+                .post("/accounts/{id}/withdrawals", withdrawFrom)
+                .statusCode());
+        assertOneOfThreeRefused(withdrawals, withdrawFrom);
+
+        String transferFrom = fundedAccount(new BigDecimal("300000.00"));
+        String transferTo = fundedAccount(BigDecimal.ZERO);
+        List<Integer> transfers = race(3, i -> given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", "tc-velocity-transfer-" + UUID.randomUUID())
+                .contentType(ContentType.JSON)
+                .body(Map.of("sourceAccountId", transferFrom, "destinationAccountId", transferTo, "amount", each))
+                .post("/transfers")
+                .statusCode());
+        assertOneOfThreeRefused(transfers, transferFrom);
+    }
+
+    private void assertOneOfThreeRefused(List<Integer> statuses, String accountId) {
+        assertThat(statuses).as("two debits fit under the daily limit and the third does not")
+                .containsExactlyInAnyOrder(201, 201, 422);
+        given().header("Authorization", "Bearer " + tellerToken)
+                .get("/accounts/{id}/balance", accountId)
+                .then().statusCode(200)
+                .body("balance", equalTo(new BigDecimal("120000.00").floatValue()));
+    }
+
+    /** A verified customer's new savings account, with {@code balance} deposited into it. */
+    private String fundedAccount(BigDecimal balance) {
+        String customerId = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON)
+                .body(Map.of("firstName", "Velocity", "lastName", "Check",
+                        "email", "tc-velocity-" + UUID.randomUUID() + "@example.com", "dateOfBirth", "1990-01-01"))
+                .post("/customers")
+                .then().statusCode(201).extract().path("id");
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON).body(Map.of("kycStatus", "VERIFIED"))
+                .patch("/customers/{id}/kyc", customerId)
+                .then().statusCode(200);
+        String accountId = given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON).body(Map.of("customerId", customerId, "accountType", "SAVINGS"))
+                .post("/accounts")
+                .then().statusCode(201).extract().path("id");
+        if (balance.signum() > 0) {
+            given().header("Authorization", "Bearer " + tellerToken)
+                    .header("Idempotency-Key", "tc-velocity-fund-" + UUID.randomUUID())
+                    .contentType(ContentType.JSON).body(Map.of("amount", balance))
+                    .post("/accounts/{id}/deposits", accountId)
+                    .then().statusCode(201);
+        }
+        return accountId;
+    }
+
+    /**
+     * Runs {@code n} requests released through one gate, as concurrentDepositsDoNotLoseAnUpdate does,
+     * and returns their status codes.
+     */
+    private static List<Integer> race(int n, java.util.function.IntFunction<Integer> request) throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(n);
+        CountDownLatch ready = new CountDownLatch(n);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Integer>> futures = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                int index = i;
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return request.apply(index);
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).as("every thread reached the gate").isTrue();
+            start.countDown();
+            List<Integer> statuses = new ArrayList<>();
+            for (Future<Integer> future : futures) {
+                statuses.add(future.get(30, TimeUnit.SECONDS));
+            }
+            return statuses;
+        } finally {
+            executor.shutdown();
+        }
     }
 
     @Test
