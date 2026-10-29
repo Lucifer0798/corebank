@@ -531,6 +531,15 @@ later reversed, and `type <> REVERSAL` drops the correcting legs, so that revers
 `idx_entry_account_posted` index serves the read, inside a transaction that already holds the
 account's row lock.
 
+**That lock is what makes the ceiling hold under concurrency.** For a long time it was true only of
+holds: withdrawals and transfers summed the day's debits *before* taking the lock, so requests that
+arrived together all counted the same total, all passed, and then queued on the lock and all posted.
+Three simultaneous withdrawals of 90,000 against a daily 200,000 all went through, which
+`CoreBankTestcontainersIT.simultaneousDebitsDoNotOutrunTheDailyLimit` showed before the fix. Now
+every debit checks the limit while holding the account's lock, so each one waits for the one before
+it to commit and counts it. A request over the limit now waits its turn for the lock before it is
+refused. It is refused either way, and that is the order holds always used.
+
 **Holds are checked at authorisation, not at capture.** Capturing a hold is exempt: the whole value
 of a hold is that the reserved money cannot be taken away in between, and a guarantee a later limit
 can revoke is not a guarantee. That exemption would be a way round the ceiling if placing a hold
