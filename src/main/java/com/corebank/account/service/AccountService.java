@@ -165,12 +165,15 @@ public class AccountService {
             throw new BusinessRuleException("STATUS_REASON_REQUIRED",
                     "Say why: freezing or closing an account is kept with the reason it was done");
         }
+        // What is still attached before what is still in it: paying out unpaid interest adds to the
+        // balance, so reporting the balance first sent staff round twice -- empty it, be told about
+        // the interest, pay it out, and empty it again.
+        if (target == AccountStatus.CLOSED) {
+            assertNothingOutstanding(account);
+        }
         if (target == AccountStatus.CLOSED && Money.isPositive(account.getBalance().abs())) {
             throw new BusinessRuleException("BALANCE_NOT_ZERO",
                     "Account " + account.getAccountNumber() + " must be emptied before it is closed");
-        }
-        if (target == AccountStatus.CLOSED) {
-            assertNothingOutstanding(account);
         }
 
         Instant now = Instant.now();
@@ -194,7 +197,7 @@ public class AccountService {
         if (!outstanding.isEmpty()) {
             throw new BusinessRuleException("CLOSURE_BLOCKED",
                     "Account " + account.getAccountNumber() + " still has " + String.join(" and ", outstanding)
-                            + "; release or cancel them before closing it");
+                            + "; settle them before closing it");
         }
     }
 

@@ -7,7 +7,9 @@ import com.corebank.account.dto.AccountResponse;
 import com.corebank.account.dto.BalanceResponse;
 import com.corebank.account.dto.OpenAccountRequest;
 import com.corebank.account.service.AccountService;
+import com.corebank.account.service.InterestService;
 import com.corebank.common.web.PagedResponse;
+import com.corebank.transaction.dto.TransactionResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -35,9 +37,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AccountController {
 
     private final AccountService accountService;
+    private final InterestService interestService;
 
-    public AccountController(AccountService accountService) {
+    public AccountController(AccountService accountService, InterestService interestService) {
         this.accountService = accountService;
+        this.interestService = interestService;
     }
 
     @PostMapping("/accounts")
@@ -91,6 +95,17 @@ public class AccountController {
     public AccountResponse unfreeze(@PathVariable UUID accountId,
                                     @Valid @RequestBody(required = false) StatusChangeRequest request) {
         return accountService.changeStatus(accountId, AccountStatus.ACTIVE, reasonOf(request));
+    }
+
+    @PostMapping("/accounts/{accountId}/interest/pay-out")
+    @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
+    @Operation(summary = "Pay an account's accrued interest out now",
+            description = "Instead of waiting for the first of the month. Whole paise only; the fraction of a paisa "
+                    + "is carried as it always is. An account with interest unpaid cannot be closed, so this is the "
+                    + "step before emptying and closing a savings account.")
+    public ResponseEntity<TransactionResponse> payOutInterest(@PathVariable UUID accountId) {
+        TransactionResponse posted = interestService.payOut(accountId);
+        return ResponseEntity.created(URI.create("/api/v1/transactions/" + posted.reference())).body(posted);
     }
 
     @PostMapping("/accounts/{accountId}/close")
