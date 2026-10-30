@@ -6,10 +6,12 @@ import com.corebank.account.domain.AccountType;
 import com.corebank.account.domain.EntryDirection;
 import com.corebank.account.repository.AccountRepository;
 import com.corebank.common.Money;
+import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.config.CoreBankProperties;
 import com.corebank.transaction.domain.BankTransaction;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.domain.TransactionType;
+import com.corebank.transaction.dto.TransactionResponse;
 import com.corebank.transaction.service.TransactionService;
 import com.corebank.transaction.service.ReferenceGenerator;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -124,6 +126,14 @@ public class InterestService {
     @Transactional
     public java.util.Optional<String> capitalise(UUID accountId) {
         Account account = accountService.requireForUpdate(accountId);
+        // Refused rather than skipped, so that whoever asked hears why. The ledger itself does not
+        // check -- a credit applies to any account -- and interest left on an account closed before
+        // closure looked for it used to be paid straight into the closed account. Frozen is fine:
+        // money in still lands on a frozen account.
+        if (account.getStatus() == AccountStatus.CLOSED) {
+            throw new BusinessRuleException("ACCOUNT_CLOSED",
+                    "Account " + account.getAccountNumber() + " is closed; its interest cannot be paid into it");
+        }
         BigDecimal payable = account.capitalisableInterest();
         if (!Money.isPositive(payable)) {
             return java.util.Optional.empty();
@@ -153,6 +163,23 @@ public class InterestService {
         meterRegistry.counter("corebank.interest.capitalised").increment();
         log.info("Capitalised {} of interest on account {}", payable, accountId);
         return java.util.Optional.of(reference);
+    }
+
+    /**
+     * Pays an account's accrued interest out now, rather than on the first of the month -- so that
+     * an account being closed can be paid what it is owed first.
+     *
+     * <p>No idempotency key, because it does not need one: what it pays is taken from the accrued
+     * figure in the same transaction, so a retry finds nothing whole left and is refused.
+     */
+    @Transactional
+    public TransactionResponse payOut(UUID accountId) {
+        return capitalise(accountId)
+                .map(transactionService::getByReference)
+                .orElseThrow(() -> new BusinessRuleException("NO_INTEREST_PAYABLE",
+                        "Account " + accountService.require(accountId).getAccountNumber()
+                                + " has no interest to pay out: only whole paise are paid, and "
+                                + accountService.require(accountId).getAccruedInterest() + " is accrued"));
     }
 
     /** Savings accounts with something whole to pay. Drives the monthly capitalisation run. */

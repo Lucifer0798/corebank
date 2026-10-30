@@ -101,10 +101,15 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
      * Savings accounts holding accrued interest worth paying out. The threshold is one paisa
      * rather than zero, because anything below it rounds down to nothing and capitalising it
      * would write a zero-amount posting the ledger refuses.
+     *
+     * <p>Never a closed account. Crediting one leaves money in an account nothing can withdraw
+     * from -- which is what happened to interest left on accounts closed before closure checked
+     * for it. Frozen accounts are still paid: money in still lands on a frozen account.
      */
     @Query("""
             select a.id from Account a
              where a.accountType = com.corebank.account.domain.AccountType.SAVINGS
+               and a.status <> com.corebank.account.domain.AccountStatus.CLOSED
                and a.accruedInterest >= 0.01
              order by a.id asc
             """)

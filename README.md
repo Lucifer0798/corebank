@@ -709,6 +709,28 @@ setting up an instruction could see the account still open, slip in after closur
 leave a live instruction on a closed account. A test holds the lock to prove that creation waits
 and is then refused.
 
+**Interest not yet paid out is the third.** A savings account emptied to zero still carried what it
+had accrued since the first of the month, and closed with it. The next monthly run then credited
+that interest into the closed account. The ledger applies a credit to any account, and nothing
+can withdraw from a closed one, so the customer's last interest was stranded there and the closed
+account was left with a balance. Now:
+
+- Closure is refused while at least a paisa is payable ("still has 19.17 INR of interest not yet
+  paid out"). A fraction of a paisa cannot be paid in real money, so it does not block.
+- `POST /accounts/{id}/interest/pay-out` pays it now rather than on the first. It needs no
+  idempotency key: what it pays comes off the accrued figure in the same transaction, so a retry
+  finds nothing left and gets `NO_INTEREST_PAYABLE`.
+- What is attached is reported before what is in the account. Paying interest out adds to the
+  balance, so the order that works is: pay out, empty, close. Reporting the balance first sent
+  staff round twice.
+- The monthly run skips closed accounts, and paying into one is refused with `ACCOUNT_CLOSED`.
+  Frozen accounts are still paid, because money in still lands on a frozen account.
+
+This does not repair accounts it already happened to. Before deploying, find them with
+`select account_number, balance from account where status = 'CLOSED' and balance <> 0`. Accounts
+closed with interest still accrued and not yet paid can be found with `... and accrued_interest >=
+0.01`. Each needs a decision about how to pay the customer.
+
 ### Scheduled transfers
 
 A standing instruction is the only thing here that moves money with no request behind it, and
@@ -1181,7 +1203,8 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/customers/{id}/accounts` | owner, staff | Accounts a customer holds |
 | `POST` | `/api/v1/accounts/{id}/freeze` | TELLER, ADMIN | Freeze an account; needs a `reason` |
 | `POST` | `/api/v1/accounts/{id}/unfreeze` | TELLER, ADMIN | Return it to service; `reason` optional |
-| `POST` | `/api/v1/accounts/{id}/close` | ADMIN | Close an account: zero balance, no active holds, no live or suspended standing instructions, and a `reason` |
+| `POST` | `/api/v1/accounts/{id}/interest/pay-out` | TELLER, ADMIN | Pay accrued interest out now rather than on the first of the month; whole paise only |
+| `POST` | `/api/v1/accounts/{id}/close` | ADMIN | Close an account: zero balance, no active holds, no live or suspended standing instructions, no interest left to pay out, and a `reason` |
 | `GET` | `/api/v1/accounts/{id}/status-changes` | TELLER, ADMIN | Every freeze, unfreeze and closure, who made it and why, newest first |
 | `POST` | `/api/v1/accounts/{id}/deposits` | TELLER, ADMIN | Deposit — needs `Idempotency-Key` |
 | `POST` | `/api/v1/accounts/{id}/withdrawals` | TELLER, ADMIN | Withdraw — needs `Idempotency-Key` |
@@ -1268,6 +1291,8 @@ as REST, passed as `authorization` metadata.
 | `SCHEDULE_NOT_ACTIVE` | 422 | That instruction has already stopped |
 | `OVERDRAFT_NOT_ALLOWED` | 422 | Savings accounts cannot carry an overdraft |
 | `BALANCE_NOT_ZERO` | 422 | An account must be emptied before it is closed |
+| `CLOSURE_BLOCKED` | 422 | Something is still attached to the account (a hold, a standing instruction, interest not yet paid out); the message lists all of it |
+| `NO_INTEREST_PAYABLE` | 422 | A pay-out was asked for, but less than a paisa of interest is accrued |
 | `INTERNAL_ACCOUNT` | 422 | General-ledger accounts are not addressable here |
 | `REVERSAL_NOT_REVERSIBLE` | 422 | A reversal cannot itself be reversed |
 | `HOLD_EXPIRED` | 422 | The hold is past its expiry and can no longer be captured |
