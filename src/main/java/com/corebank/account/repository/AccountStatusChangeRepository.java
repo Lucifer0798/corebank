@@ -14,5 +14,5 @@ public interface AccountStatusChangeRepository extends Repository<AccountStatusC
 
     AccountStatusChange save(AccountStatusChange change);
 
-    Page<AccountStatusChange> findByAccountIdOrderByChangedAtDesc(UUID accountId, Pageable pageable);
+    Page<AccountStatusChange> findByAccountIdOrderByChangedAtDescSeqDesc(UUID accountId, Pageable pageable);
 }

@@ -49,6 +49,14 @@ public class IdentityLink {
     @Column(name = "linked_at", nullable = false, updatable = false)
     private Instant linkedAt;
 
+    /**
+     * Numbered by the database as the row is inserted: the tiebreak when two entries share a
+     * timestamp, so newest first is the order they were written in. See V21. Only queries use it,
+     * so it is not read back after a save, and is null on an entity that has just been saved.
+     */
+    @Column(name = "seq", insertable = false, updatable = false)
+    private Long seq;
+
     public IdentityLink(UUID customerId, String previousSubject, String newSubject, Actor linkedBy, String reason,
                         Instant linkedAt) {
         this.customerId = customerId;

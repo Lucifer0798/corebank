@@ -46,6 +46,14 @@ public class ScheduledTransferEvent {
     @Column(name = "occurred_at", nullable = false, updatable = false)
     private Instant occurredAt;
 
+    /**
+     * Numbered by the database as the row is inserted: the tiebreak when two entries share a
+     * timestamp, so newest first is the order they were written in. See V21. Only queries use it,
+     * so it is not read back after a save, and is null on an entity that has just been saved.
+     */
+    @Column(name = "seq", insertable = false, updatable = false)
+    private Long seq;
+
     public ScheduledTransferEvent(UUID scheduledTransferId, ScheduleEventType event, Actor actor, String reason,
                                   Instant occurredAt) {
         this.scheduledTransferId = scheduledTransferId;
