@@ -500,6 +500,31 @@ second replica cannot pay the same day twice, which is also why the runner can t
 extra ticks pick up accounts opened since the last one and finish oversized batches, and a
 once-a-day schedule would let a badly timed restart cost a day.
 
+**A day with no tick at all is caught up, not lost.** Hourly ticks cover a restart, not a whole
+UTC day without one: a deploy left down overnight, a crash loop, a database outage. The run only
+asks for today, and an account refuses any day before the last one it was accrued for. So each of
+those days used to be interest the customer never got, and the accrued-through date looked up to
+date afterwards. A probe accrued the 1st and then the 5th of January and ended with two days'
+interest, not five.
+
+Now the first accrual after a gap also accrues every missed day:
+
+- **On the balance that day opened with.** The ledger gives it back: the current balance less
+  everything posted since. The API may have stayed up while only the run failed, so today's
+  balance is not the right one.
+- **Only if the account was active when that day opened.** The status history gives this. It is
+  the same rule as a day the run does reach, which accrues at the first tick on what it finds.
+  A frozen account is never picked up by the run, so the days it spends frozen are missed days
+  too, and this is what keeps them unpaid once it is unfrozen.
+
+A brand-new account is not backdated; it earns from the first day it is accrued for. Status
+history only exists since V18. A missed day earlier than an account's first recorded change is
+taken to have had the status the account has now. So an account frozen and unfrozen before V18,
+whose accrued-through date stopped at the freeze, would be paid for its frozen days on the first
+run. Before deploying, `select account_number, interest_accrued_through from account where
+account_type = 'SAVINGS' and status = 'ACTIVE' and interest_accrued_through < current_date - 1`
+lists every account the first run will catch up.
+
 Because capitalised interest joins the balance, the product **compounds** — a year of daily accrual
 on ₹10,000 pays about ₹355.67 rather than the ₹350.00 of simple interest. The test bounds it from
 both sides using arithmetic rather than the implementation: strictly more than simple interest, and

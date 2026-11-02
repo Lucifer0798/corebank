@@ -70,4 +70,22 @@ public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, UUID> 
     BigDecimal sumDebitsBetween(@Param("accountId") UUID accountId,
                                 @Param("from") Instant from,
                                 @Param("to") Instant to);
+
+    /**
+     * How far an account's balance has moved since {@code from}: entries on its normal side less
+     * those against it, which is exactly what {@code Account.applyEntry} added. The current balance
+     * less this is the balance the account had at {@code from}.
+     *
+     * <p>Every entry, whatever became of its transaction. A reversed withdrawal's entries and its
+     * reversal's both moved the balance, and cancel each other here exactly as they did there.
+     */
+    @Query("""
+            select coalesce(sum(case when e.direction = :normal then e.amount else 0 - e.amount end), 0)
+              from LedgerEntry e
+             where e.account.id = :accountId
+               and e.postedAt >= :from
+            """)
+    BigDecimal netMovementSince(@Param("accountId") UUID accountId,
+                                @Param("normal") com.corebank.account.domain.EntryDirection normal,
+                                @Param("from") Instant from);
 }
