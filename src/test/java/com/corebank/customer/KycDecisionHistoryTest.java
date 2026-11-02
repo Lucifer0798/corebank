@@ -147,7 +147,7 @@ class KycDecisionHistoryTest {
 
         assertThatThrownBy(() -> {
             decisions.save(unexplained);
-            decisions.findByCustomerIdOrderByDecidedAtDesc(customerId, PageRequest.of(0, 1)).getContent();
+            decisions.findByCustomerIdOrderByDecidedAtDescSeqDesc(customerId, PageRequest.of(0, 1)).getContent();
         }).isInstanceOf(DataIntegrityViolationException.class);
     }
 }

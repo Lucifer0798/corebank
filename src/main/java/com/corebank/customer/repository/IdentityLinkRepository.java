@@ -11,5 +11,5 @@ public interface IdentityLinkRepository extends Repository<IdentityLink, UUID> {
 
     IdentityLink save(IdentityLink link);
 
-    Page<IdentityLink> findByCustomerIdOrderByLinkedAtDesc(UUID customerId, Pageable pageable);
+    Page<IdentityLink> findByCustomerIdOrderByLinkedAtDescSeqDesc(UUID customerId, Pageable pageable);
 }

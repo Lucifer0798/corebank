@@ -172,7 +172,7 @@ public class CustomerService {
     @Transactional(readOnly = true)
     public Page<IdentityLinkResponse> identityLinks(UUID id, Pageable pageable) {
         require(id);
-        return identityLinks.findByCustomerIdOrderByLinkedAtDesc(id, pageable).map(IdentityLinkResponse::from);
+        return identityLinks.findByCustomerIdOrderByLinkedAtDescSeqDesc(id, pageable).map(IdentityLinkResponse::from);
     }
 
     private CustomerResponse link(Customer customer, String keycloakSubject, String reason) {
@@ -191,7 +191,7 @@ public class CustomerService {
     @Transactional(readOnly = true)
     public Page<KycDecisionResponse> kycDecisions(UUID id, Pageable pageable) {
         require(id);
-        return decisions.findByCustomerIdOrderByDecidedAtDesc(id, pageable).map(KycDecisionResponse::from);
+        return decisions.findByCustomerIdOrderByDecidedAtDescSeqDesc(id, pageable).map(KycDecisionResponse::from);
     }
 
     /** Loads a customer for other services, raising the standard 404 when absent. */

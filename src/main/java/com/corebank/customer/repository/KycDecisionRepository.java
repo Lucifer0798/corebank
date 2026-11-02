@@ -15,5 +15,5 @@ public interface KycDecisionRepository extends Repository<KycDecision, UUID> {
 
     KycDecision save(KycDecision decision);
 
-    Page<KycDecision> findByCustomerIdOrderByDecidedAtDesc(UUID customerId, Pageable pageable);
+    Page<KycDecision> findByCustomerIdOrderByDecidedAtDescSeqDesc(UUID customerId, Pageable pageable);
 }

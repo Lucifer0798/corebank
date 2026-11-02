@@ -211,7 +211,7 @@ public class AccountService {
     @Transactional(readOnly = true)
     public Page<AccountStatusChangeResponse> statusHistory(UUID accountId, Pageable pageable) {
         require(accountId);
-        return statusChanges.findByAccountIdOrderByChangedAtDesc(accountId, pageable)
+        return statusChanges.findByAccountIdOrderByChangedAtDescSeqDesc(accountId, pageable)
                 .map(AccountStatusChangeResponse::from);
     }
 
