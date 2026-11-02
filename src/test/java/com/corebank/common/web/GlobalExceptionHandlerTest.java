@@ -139,7 +139,11 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("MALFORMED_REQUEST_BODY"))
                 .andExpect(jsonPath("$.type").value("https://corebank.example/problems/malformed-request-body"))
-                .andExpect(content().string(Matchers.not(Matchers.containsStringIgnoringCase("jackson"))));
+                // Exact, not "does not mention Jackson": the parser's message ("JSON parse error:
+                // Unexpected end-of-input ...") never names it, so that check passed with it leaked.
+                .andExpect(jsonPath("$.detail")
+                        .value("The request body is missing, is not valid JSON, or has a field of the wrong type"))
+                .andExpect(content().string(Matchers.not(Matchers.containsString("end-of-input"))));
     }
 
     @Test
