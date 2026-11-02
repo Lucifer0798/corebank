@@ -7,6 +7,8 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 
 import com.corebank.grpc.proto.AccountQueryServiceGrpc;
+import com.corebank.account.repository.AccountRepository;
+import com.corebank.account.service.InterestService;
 import com.corebank.notification.repository.NotificationRepository;
 import com.corebank.search.SearchIndexInitializer;
 import com.corebank.grpc.proto.GetAccountRequest;
@@ -45,6 +47,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -220,6 +223,15 @@ class CoreBankTestcontainersIT {
 
     @Autowired
     private NotificationRepository notificationRepository;
+
+    @Autowired
+    private InterestService interestService;
+
+    @Autowired
+    private AccountRepository accountRepository;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     private String tellerToken;
     private String adminToken;
@@ -773,6 +785,40 @@ class CoreBankTestcontainersIT {
                 .post("/transfers")
                 .statusCode());
         assertOneOfThreeRefused(transfers, transferFrom);
+    }
+
+    @Test
+    @Order(12)
+    @DisplayName("missed accrual days are caught up from the ledger and status history on real Postgres")
+    void missedAccrualDaysAreCaughtUpOnPostgres() {
+        // MissedAccrualTest covers the rules on H2. This is the two queries behind them on the real
+        // database: a type error in either would make every accrual after a gap fail, and the runner
+        // logs and moves on, so those accounts would quietly stop earning at all.
+        String accountId = fundedAccount(new BigDecimal("10000.00"));
+        UUID id = UUID.fromString(accountId);
+        jdbc.update("update ledger_entry set posted_at = ? where account_id = ?",
+                java.sql.Timestamp.from(java.time.Instant.parse("2025-12-31T12:00:00Z")), id);
+        interestService.accrue(id, java.time.LocalDate.of(2026, 1, 1));
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON).body(Map.of("reason", "Fraud report"))
+                .post("/accounts/{id}/freeze", accountId)
+                .then().statusCode(200);
+        given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON).body(Map.of())
+                .post("/accounts/{id}/unfreeze", accountId)
+                .then().statusCode(200);
+        // Frozen at midday on the 2nd, unfrozen at midday on the 4th: the 3rd and 4th opened frozen.
+        jdbc.update("update account_status_change set changed_at = ? where account_id = ? and to_status = 'FROZEN'",
+                java.sql.Timestamp.from(java.time.Instant.parse("2026-01-02T12:00:00Z")), id);
+        jdbc.update("update account_status_change set changed_at = ? where account_id = ? and to_status = 'ACTIVE'",
+                java.sql.Timestamp.from(java.time.Instant.parse("2026-01-04T12:00:00Z")), id);
+
+        interestService.accrue(id, java.time.LocalDate.of(2026, 1, 6));
+
+        // The 1st, 2nd, 5th and 6th at 0.9589 a day on 10,000.
+        assertThat(accountRepository.findById(id).orElseThrow().getAccruedInterest())
+                .isEqualByComparingTo("3.8356");
     }
 
     private void assertOneOfThreeRefused(List<Integer> statuses, String accountId) {

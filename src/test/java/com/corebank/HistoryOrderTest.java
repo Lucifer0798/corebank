@@ -48,8 +48,9 @@ import org.springframework.data.domain.PageRequest;
  * share a timestamp. A resume and a cancel a moment apart can land on the same instant, and then
  * the timestamp alone leaves their order to the database: in practice, to the random ids.
  *
- * Each test writes {@value #TIED} entries at one instant, then one older entry last. Read back,
- * the tied entries must come in exact reverse order of writing, and the older one after them.
+ * Each test writes {@value #TIED} entries at one instant and one older entry, the older one out of
+ * place. Read back newest first, the tied entries must come in exact reverse order of writing, and
+ * the older one after them; oldest first, the other way round.
  * Without a tiebreak the chance of that by luck is 1 in 10!, so these fail every time it is missing.
  */
 @SpringBootTest
@@ -122,6 +123,24 @@ class HistoryOrderTest {
 
         assertThat(accountService.statusHistory(account, firstPage()).getContent())
                 .extracting(AccountStatusChangeResponse::reason).containsExactlyElementsOf(newestFirst());
+    }
+
+    @Test
+    @DisplayName("replayed oldest first, status changes at the same instant come in the order they were made")
+    void accountStatusChangeTiesOldestFirst() {
+        statusChanges.save(new AccountStatusChange(account, AccountStatus.ACTIVE, AccountStatus.FROZEN, STAFF,
+                "older", AT.minusSeconds(1)));
+        for (int i = 0; i < TIED; i++) {
+            statusChanges.save(new AccountStatusChange(account, AccountStatus.ACTIVE, AccountStatus.FROZEN, STAFF,
+                    "#" + i, AT));
+        }
+
+        // The interest run replays this to find the status on a past day; a freeze and an unfreeze
+        // at one instant, replayed backwards, would leave the account frozen when it was not.
+        List<String> oldestFirst = new java.util.ArrayList<>(newestFirst());
+        java.util.Collections.reverse(oldestFirst);
+        assertThat(statusChanges.findByAccountIdOrderByChangedAtAscSeqAsc(account))
+                .extracting(AccountStatusChange::getReason).containsExactlyElementsOf(oldestFirst);
     }
 
     @Test

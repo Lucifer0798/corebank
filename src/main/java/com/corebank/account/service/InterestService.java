@@ -4,7 +4,9 @@ import com.corebank.account.domain.Account;
 import com.corebank.account.domain.AccountStatus;
 import com.corebank.account.domain.AccountType;
 import com.corebank.account.domain.EntryDirection;
+import com.corebank.account.domain.AccountStatusChange;
 import com.corebank.account.repository.AccountRepository;
+import com.corebank.account.repository.AccountStatusChangeRepository;
 import com.corebank.common.Money;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.config.CoreBankProperties;
@@ -12,6 +14,7 @@ import com.corebank.transaction.domain.BankTransaction;
 import com.corebank.transaction.domain.TransactionStatus;
 import com.corebank.transaction.domain.TransactionType;
 import com.corebank.transaction.dto.TransactionResponse;
+import com.corebank.transaction.repository.LedgerEntryRepository;
 import com.corebank.transaction.service.TransactionService;
 import com.corebank.transaction.service.ReferenceGenerator;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -59,6 +62,8 @@ public class InterestService {
     private final CoreBankProperties.Interest properties;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
+    private final LedgerEntryRepository entries;
+    private final AccountStatusChangeRepository statusChanges;
 
     public InterestService(AccountRepository accounts,
                            TransactionService transactionService,
@@ -66,8 +71,12 @@ public class InterestService {
                            ReferenceGenerator referenceGenerator,
                            CoreBankProperties properties,
                            MeterRegistry meterRegistry,
-                           Clock clock) {
+                           Clock clock,
+                           LedgerEntryRepository entries,
+                           AccountStatusChangeRepository statusChanges) {
         this.accounts = accounts;
+        this.entries = entries;
+        this.statusChanges = statusChanges;
         this.transactionService = transactionService;
         this.accountService = accountService;
         this.referenceGenerator = referenceGenerator;
@@ -100,19 +109,70 @@ public class InterestService {
         return accounts.findSavingsNotAccruedThrough(day, PageRequest.of(0, BATCH_SIZE));
     }
 
-    /** Adds one day's interest to one account. Safe to repeat: the account refuses a repeat day. */
+    /**
+     * Adds {@code day}'s interest to one account, and any earlier day it was never accrued for. Safe
+     * to repeat: the account refuses a day it has already had.
+     *
+     * <p>The earlier days are the point. The run only ever asks for today, and an account refuses a
+     * day before the last one it was accrued for -- so a day with no run at all (a deploy down
+     * overnight, a crash loop, a database outage) used to be interest the customer simply never got,
+     * with an accrued-through date that looked up to date. Ticking hourly covers a restart, not a
+     * whole day without a tick.
+     *
+     * <p>Each missed day earns on the balance it opened with, read back from the ledger, and only if
+     * the account was active when it opened, read back from the status history -- the same rule as a
+     * day the run does reach, which accrues at the first tick on the balance and status it finds. A
+     * frozen account is never picked up by the run, so the days it spent frozen are missed days too,
+     * and this is what keeps them unpaid once it is unfrozen. {@code day} itself is accrued as before,
+     * on the current balance and only if the account is active now.
+     *
+     * <p>A brand-new account has no earlier day to catch up: it earns from the first day it is
+     * accrued for, as it always has.
+     */
     @Transactional
     public boolean accrue(UUID accountId, LocalDate day) {
         Account account = accountService.requireForUpdate(accountId);
         if (account.getStatus() != AccountStatus.ACTIVE) {
             return false;
         }
-        BigDecimal amount = dailyInterestOn(account.getBalance());
-        boolean accrued = account.accrueInterestFor(day, amount);
+        LocalDate through = account.getInterestAccruedThrough();
+        if (through != null && !day.isAfter(through)) {
+            return false;
+        }
+
+        boolean accrued = false;
+        if (through != null && through.plusDays(1).isBefore(day)) {
+            List<AccountStatusChange> history = statusChanges.findByAccountIdOrderByChangedAtAscSeqAsc(accountId);
+            for (LocalDate missed = through.plusDays(1); missed.isBefore(day); missed = missed.plusDays(1)) {
+                Instant opened = missed.atStartOfDay(ZoneOffset.UTC).toInstant();
+                if (statusAt(history, opened, account.getStatus()) == AccountStatus.ACTIVE) {
+                    BigDecimal openingBalance = account.getBalance().subtract(
+                            entries.netMovementSince(accountId, account.getNormalBalance(), opened));
+                    accrued |= account.accrueInterestFor(missed, dailyInterestOn(openingBalance));
+                }
+            }
+        }
+
+        accrued |= account.accrueInterestFor(day, dailyInterestOn(account.getBalance()));
         if (accrued) {
             meterRegistry.counter("corebank.interest.accrued").increment();
         }
         return accrued;
+    }
+
+    /**
+     * The account's status at {@code at}: the last change before it, else what the first change after
+     * it changed from, else -- nothing ever changed -- the status it has now.
+     */
+    private static AccountStatus statusAt(List<AccountStatusChange> history, Instant at, AccountStatus current) {
+        AccountStatus status = history.isEmpty() ? current : history.get(0).getFromStatus();
+        for (AccountStatusChange change : history) {
+            if (!change.getChangedAt().isBefore(at)) {
+                break;
+            }
+            status = change.getToStatus();
+        }
+        return status;
     }
 
     /**

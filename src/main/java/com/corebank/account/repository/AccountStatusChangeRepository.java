@@ -1,6 +1,7 @@
 package com.corebank.account.repository;
 
 import com.corebank.account.domain.AccountStatusChange;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -15,4 +16,7 @@ public interface AccountStatusChangeRepository extends Repository<AccountStatusC
     AccountStatusChange save(AccountStatusChange change);
 
     Page<AccountStatusChange> findByAccountIdOrderByChangedAtDescSeqDesc(UUID accountId, Pageable pageable);
+
+    /** Oldest first: what the account's status was on any past day. See InterestService.accrue. */
+    List<AccountStatusChange> findByAccountIdOrderByChangedAtAscSeqAsc(UUID accountId);
 }
