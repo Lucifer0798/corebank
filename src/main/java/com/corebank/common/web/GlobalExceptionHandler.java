@@ -13,14 +13,20 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -125,15 +131,84 @@ public class GlobalExceptionHandler {
         return problem(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_FAILED", "Authentication failed");
     }
 
-    @ExceptionHandler(Exception.class)
-    public ProblemDetail handleUnexpected(Exception ex) {
-        log.error("Unhandled exception", ex);
-        return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "An unexpected error occurred");
+    /**
+     * A request body that is missing, is not JSON, or has a field of the wrong type. Not an
+     * {@link ErrorResponse}, so the catch-all's check below would never see it. The parser's own
+     * message quotes the payload and names Jackson internals, so none of it is passed on.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ProblemDetail handleUnreadableBody(HttpMessageNotReadableException ex) {
+        log.warn("Rejected unreadable request body: {}", ex.getMessage());
+        return problem(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST_BODY",
+                "The request body is missing, is not valid JSON, or has a field of the wrong type");
     }
 
-    private ProblemDetail problem(HttpStatus status, String code, String detail) {
+    /**
+     * A path variable or query parameter that will not convert, such as a non-UUID id. Also not
+     * an {@link ErrorResponse}. Names the parameter, which the API declares, but not the value,
+     * which the caller sent.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ProblemDetail handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        log.warn("Rejected request parameter: {}", ex.getMessage());
+        return problem(HttpStatus.BAD_REQUEST, "INVALID_PARAMETER",
+                "Parameter '" + ex.getName() + "' has an invalid value");
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ProblemDetail handleMissingParameter(MissingServletRequestParameterException ex) {
+        return problem(HttpStatus.BAD_REQUEST, "MISSING_PARAMETER",
+                "Required parameter '" + ex.getParameterName() + "' is missing");
+    }
+
+    /**
+     * Genuine 500s, plus every framework client error the handlers above do not name. The second
+     * group is why this checks for {@link ErrorResponse} before answering 500: Spring MVC's own
+     * client errors (an unsupported content type or method, an unacceptable {@code Accept})
+     * implement it and carry their real status, and used to be swallowed here as 500s logged at
+     * ERROR -- a form-encoded POST to unfreeze answered 500 instead of 415.
+     *
+     * <p>The check lives here rather than in its own {@code @ExceptionHandler} because
+     * {@code ErrorResponse} is an interface, which the annotation cannot name, and the exceptions
+     * implementing it share no common class below {@link Exception}: some extend
+     * {@code ErrorResponseException}, most extend {@code ServletException}. Checking the interface
+     * covers both, and any the framework adds later, without listing them. A framework exception
+     * reporting a 5xx is still a server fault and is treated as one.
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
+        if (ex instanceof ErrorResponse error && error.getStatusCode().is4xxClientError()) {
+            return handleFrameworkClientError(ex, error);
+        }
+        log.error("Unhandled exception", ex);
+        return ResponseEntity.internalServerError()
+                .body(problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "An unexpected error occurred"));
+    }
+
+    /**
+     * The code is the status's own name ({@code METHOD_NOT_ALLOWED}, {@code UNSUPPORTED_MEDIA_TYPE},
+     * {@code NOT_ACCEPTABLE}), so a framework exception nobody here has heard of still gets a
+     * stable one. The framework's headers are kept: they carry the {@code Allow} a 405 owes the
+     * caller and the {@code Accept} that tells a 415 what would have worked.
+     */
+    private ResponseEntity<ProblemDetail> handleFrameworkClientError(Exception ex, ErrorResponse error) {
+        HttpStatusCode status = error.getStatusCode();
+        log.warn("Rejected request with {}: {}", status.value(), ex.getMessage());
+        HttpStatus known = HttpStatus.resolve(status.value());
+        String code = known != null ? known.name() : "HTTP_" + status.value();
+        String detail = switch (status.value()) {
+            case 405 -> "This endpoint does not support that HTTP method; see the Allow header";
+            case 406 -> "This endpoint cannot produce any of the requested media types";
+            case 415 -> "This endpoint does not accept that content type; see the Accept header";
+            default -> known != null ? known.getReasonPhrase() : "The request was rejected";
+        };
+        return ResponseEntity.status(status).headers(error.getHeaders()).body(problem(status, code, detail));
+    }
+
+    private ProblemDetail problem(HttpStatusCode status, String code, String detail) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
-        problem.setTitle(status.getReasonPhrase());
+        HttpStatus known = HttpStatus.resolve(status.value());
+        problem.setTitle(known != null ? known.getReasonPhrase() : null);
         problem.setType(URI.create("https://corebank.example/problems/" + code.toLowerCase().replace('_', '-')));
         Map<String, Object> extras = new LinkedHashMap<>();
         extras.put(CODE, code);
