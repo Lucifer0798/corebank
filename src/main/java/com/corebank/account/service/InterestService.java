@@ -142,7 +142,7 @@ public class InterestService {
 
         boolean accrued = false;
         if (through != null && through.plusDays(1).isBefore(day)) {
-            List<AccountStatusChange> history = statusChanges.findByAccountIdOrderByChangedAtAsc(accountId);
+            List<AccountStatusChange> history = statusChanges.findByAccountIdOrderByChangedAtAscSeqAsc(accountId);
             for (LocalDate missed = through.plusDays(1); missed.isBefore(day); missed = missed.plusDays(1)) {
                 Instant opened = missed.atStartOfDay(ZoneOffset.UTC).toInstant();
                 if (statusAt(history, opened, account.getStatus()) == AccountStatus.ACTIVE) {

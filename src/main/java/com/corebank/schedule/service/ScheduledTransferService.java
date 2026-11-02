@@ -280,7 +280,7 @@ public class ScheduledTransferService {
     @Transactional(readOnly = true)
     public Page<ScheduledTransferEventResponse> events(UUID id, Pageable pageable) {
         require(id);
-        return events.findByScheduledTransferIdOrderByOccurredAtDesc(id, pageable)
+        return events.findByScheduledTransferIdOrderByOccurredAtDescSeqDesc(id, pageable)
                 .map(ScheduledTransferEventResponse::from);
     }
 

@@ -11,6 +11,6 @@ public interface ScheduledTransferEventRepository extends Repository<ScheduledTr
 
     ScheduledTransferEvent save(ScheduledTransferEvent event);
 
-    Page<ScheduledTransferEvent> findByScheduledTransferIdOrderByOccurredAtDesc(UUID scheduledTransferId,
-                                                                               Pageable pageable);
+    Page<ScheduledTransferEvent> findByScheduledTransferIdOrderByOccurredAtDescSeqDesc(UUID scheduledTransferId,
+                                                                                       Pageable pageable);
 }

@@ -15,8 +15,8 @@ public interface AccountStatusChangeRepository extends Repository<AccountStatusC
 
     AccountStatusChange save(AccountStatusChange change);
 
-    Page<AccountStatusChange> findByAccountIdOrderByChangedAtDesc(UUID accountId, Pageable pageable);
+    Page<AccountStatusChange> findByAccountIdOrderByChangedAtDescSeqDesc(UUID accountId, Pageable pageable);
 
     /** Oldest first: what the account's status was on any past day. See InterestService.accrue. */
-    List<AccountStatusChange> findByAccountIdOrderByChangedAtAsc(UUID accountId);
+    List<AccountStatusChange> findByAccountIdOrderByChangedAtAscSeqAsc(UUID accountId);
 }
