@@ -1282,6 +1282,12 @@ as REST, passed as `authorization` metadata.
 | --- | --- | --- |
 | `VALIDATION_FAILED` | 400 | Request body failed validation; see `errors` |
 | `MISSING_HEADER` | 400 | A required header, usually `Idempotency-Key`, was absent |
+| `MISSING_PARAMETER` | 400 | A required query parameter was absent; the detail names it |
+| `INVALID_PARAMETER` | 400 | A path variable or query parameter would not convert, such as an id that is not a UUID |
+| `MALFORMED_REQUEST_BODY` | 400 | The body is missing, is not valid JSON, or has a field of the wrong type |
+| `METHOD_NOT_ALLOWED` | 405 | The path exists but not for that HTTP method; the `Allow` header lists the ones it takes |
+| `NOT_ACCEPTABLE` | 406 | The `Accept` header asks for nothing the API produces (it produces JSON) |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | The body's `Content-Type` is not one the endpoint reads; the `Accept` header lists those it does |
 | `UNAUTHENTICATED` | 401 | No valid bearer token |
 | `ACCESS_DENIED` | 403 | Authenticated, but not allowed |
 | `RESOURCE_NOT_FOUND` | 404 | No such customer, account or transaction |
@@ -1322,6 +1328,9 @@ as REST, passed as `authorization` metadata.
 | `REVERSAL_NOT_REVERSIBLE` | 422 | A reversal cannot itself be reversed |
 | `HOLD_EXPIRED` | 422 | The hold is past its expiry and can no longer be captured |
 | `INVALID_REPLAY_WINDOW` | 422 | An outbox replay's `until` is not after its `since` |
+
+Any other client error Spring MVC raises itself answers with its own status and the status's name
+as the code (for example `PAYLOAD_TOO_LARGE` for a 413), rather than falling through to a 500.
 
 ---
 
