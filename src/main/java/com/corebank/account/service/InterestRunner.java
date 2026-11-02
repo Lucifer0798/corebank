@@ -3,6 +3,7 @@ package com.corebank.account.service;
 import com.corebank.common.security.Actor;
 import com.corebank.common.security.Actors;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +17,14 @@ import org.springframework.stereotype.Component;
  *
  * <p>Ticking more often than once a day is intentional and harmless: {@code Account} refuses a day
  * it has already been accrued for, so the extra ticks are how the run catches accounts opened since
- * the last one and how it finishes a batch too large for a single pass. It is also what makes a
- * restart mid-run safe, since nothing depends on the process surviving to the end.
+ * the last one. It is also what makes a restart mid-run safe, since nothing depends on the process
+ * surviving to the end.
+ *
+ * <p>Each tick works through <em>every</em> account due, a batch at a time. It used to do one batch
+ * and stop, trusting later ticks to finish -- which capped accrual at 200 accounts an hour, 4,800 a
+ * day, starting from the lowest id each day, so beyond that the same accounts were missed every day
+ * and never earned. Each batch starts after the last id of the one before, which is also what moves
+ * the run past an account that fails every time instead of fetching it again.
  *
  * <p>Disabled in the test suite, like the other two runners -- a background job that credits
  * interest underneath unrelated tests would make their balances depend on the wall clock.
@@ -45,24 +52,40 @@ public class InterestRunner {
 
     private void accrueAndCapitalise() {
         LocalDate today = interestService.today();
-
-        for (UUID id : interestService.findAccountsToAccrue(today)) {
-            try {
-                interestService.accrue(id, today);
-            } catch (RuntimeException ex) {
-                // One account's failure must not cost every other account its day's interest.
-                log.warn("Could not accrue interest on account {}: {}", id, ex.toString());
-            }
-        }
-
+        accrueAll(today);
         if (interestService.isCapitalisationDay()) {
-            for (UUID id : interestService.findAccountsToCapitalise()) {
+            capitaliseAll();
+        }
+    }
+
+    void accrueAll(LocalDate today) {
+        UUID after = InterestService.FIRST;
+        for (List<UUID> batch = interestService.findAccountsToAccrue(today, after); !batch.isEmpty();
+                batch = interestService.findAccountsToAccrue(today, after)) {
+            for (UUID id : batch) {
+                try {
+                    interestService.accrue(id, today);
+                } catch (RuntimeException ex) {
+                    // One account's failure must not cost every other account its day's interest.
+                    log.warn("Could not accrue interest on account {}: {}", id, ex.toString());
+                }
+            }
+            after = batch.getLast();
+        }
+    }
+
+    void capitaliseAll() {
+        UUID after = InterestService.FIRST;
+        for (List<UUID> batch = interestService.findAccountsToCapitalise(after); !batch.isEmpty();
+                batch = interestService.findAccountsToCapitalise(after)) {
+            for (UUID id : batch) {
                 try {
                     interestService.capitalise(id);
                 } catch (RuntimeException ex) {
                     log.warn("Could not capitalise interest on account {}: {}", id, ex.toString());
                 }
             }
+            after = batch.getLast();
         }
     }
 }

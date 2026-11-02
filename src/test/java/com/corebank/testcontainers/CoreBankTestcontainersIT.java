@@ -8,7 +8,10 @@ import static org.hamcrest.Matchers.equalTo;
 
 import com.corebank.grpc.proto.AccountQueryServiceGrpc;
 import com.corebank.account.repository.AccountRepository;
+import com.corebank.account.service.AccountService;
+import com.corebank.account.service.InterestRunner;
 import com.corebank.account.service.InterestService;
+import com.corebank.customer.service.CustomerService;
 import com.corebank.notification.repository.NotificationRepository;
 import com.corebank.search.SearchIndexInitializer;
 import com.corebank.grpc.proto.GetAccountRequest;
@@ -232,6 +235,12 @@ class CoreBankTestcontainersIT {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private AccountService accountService;
+
+    @Autowired
+    private CustomerService customerService;
 
     private String tellerToken;
     private String adminToken;
@@ -819,6 +828,35 @@ class CoreBankTestcontainersIT {
         // The 1st, 2nd, 5th and 6th at 0.9589 a day on 10,000.
         assertThat(accountRepository.findById(id).orElseThrow().getAccruedInterest())
                 .isEqualByComparingTo("3.8356");
+    }
+
+    @Test
+    @Order(13)
+    @DisplayName("one interest tick reaches every account past the first batch on real Postgres")
+    void oneInterestTickReachesEveryAccountOnPostgres() {
+        // InterestRunnerBatchTest covers the loop on H2. What only Postgres can show is the keyset
+        // itself: batches are taken in uuid order after the last id seen, starting from the all-zero
+        // uuid, and an ordering that put any id below it would skip that account every day.
+        List<UUID> ids = new ArrayList<>();
+        UUID customerId = null;
+        for (int i = 0; i < 205; i++) {
+            if (i % 5 == 0) {
+                customerId = customerService.create(new com.corebank.customer.dto.CreateCustomerRequest("Batch", "Holder",
+                        "tc-batch-" + UUID.randomUUID() + "@example.com", null, java.time.LocalDate.of(1990, 1, 1))).id();
+                customerService.updateKyc(customerId, com.corebank.customer.domain.KycStatus.VERIFIED, null,
+                        com.corebank.config.TestDeciders.STAFF);
+            }
+            ids.add(accountService.open(new com.corebank.account.dto.OpenAccountRequest(customerId,
+                    com.corebank.account.domain.AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id());
+        }
+
+        new InterestRunner(interestService).run();
+
+        java.time.LocalDate today = interestService.today();
+        assertThat(accountRepository.findAllById(ids))
+                .extracting(com.corebank.account.domain.Account::getInterestAccruedThrough)
+                .hasSize(205)
+                .containsOnly(today);
     }
 
     private void assertOneOfThreeRefused(List<Integer> statuses, String accountId) {

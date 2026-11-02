@@ -87,15 +87,21 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
      *
      * <p>{@code interestAccruedThrough IS NULL} catches accounts opened since the last run, which
      * would otherwise never be picked up at all.
+     *
+     * <p>A page of the accounts after {@code after}, in id order, rather than always the first page:
+     * an account whose accrual fails is still due, so a first-page query hands it back on every
+     * fetch. Starting after the last id seen is what lets a run move past it.
      */
     @Query("""
             select a.id from Account a
              where a.accountType = com.corebank.account.domain.AccountType.SAVINGS
                and a.status = com.corebank.account.domain.AccountStatus.ACTIVE
                and (a.interestAccruedThrough is null or a.interestAccruedThrough < :day)
+               and a.id > :after
              order by a.id asc
             """)
-    List<UUID> findSavingsNotAccruedThrough(@Param("day") LocalDate day, Pageable pageable);
+    List<UUID> findSavingsNotAccruedThrough(@Param("day") LocalDate day, @Param("after") UUID after,
+                                            Pageable pageable);
 
     /**
      * Savings accounts holding accrued interest worth paying out. The threshold is one paisa
@@ -105,13 +111,17 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
      * <p>Never a closed account. Crediting one leaves money in an account nothing can withdraw
      * from -- which is what happened to interest left on accounts closed before closure checked
      * for it. Frozen accounts are still paid: money in still lands on a frozen account.
+     *
+     * <p>Paged after {@code after} for the same reason as {@link #findSavingsNotAccruedThrough}: an
+     * account whose capitalisation fails keeps its interest, so it would head every first page.
      */
     @Query("""
             select a.id from Account a
              where a.accountType = com.corebank.account.domain.AccountType.SAVINGS
                and a.status <> com.corebank.account.domain.AccountStatus.CLOSED
                and a.accruedInterest >= 0.01
+               and a.id > :after
              order by a.id asc
             """)
-    List<UUID> findSavingsWithAccruedInterest(Pageable pageable);
+    List<UUID> findSavingsWithAccruedInterest(@Param("after") UUID after, Pageable pageable);
 }

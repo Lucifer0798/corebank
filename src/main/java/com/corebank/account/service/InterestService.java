@@ -55,6 +55,9 @@ public class InterestService {
     /** One accrual tick. Bounded so a large portfolio is worked through over several ticks. */
     static final int BATCH_SIZE = 200;
 
+    /** Sorts before every account id, so a run that starts after it starts at the beginning. */
+    public static final UUID FIRST = new UUID(0, 0);
+
     private final AccountRepository accounts;
     private final TransactionService transactionService;
     private final AccountService accountService;
@@ -106,7 +109,13 @@ public class InterestService {
 
     @Transactional(readOnly = true)
     public List<UUID> findAccountsToAccrue(LocalDate day) {
-        return accounts.findSavingsNotAccruedThrough(day, PageRequest.of(0, BATCH_SIZE));
+        return findAccountsToAccrue(day, FIRST);
+    }
+
+    /** The next batch still to accrue for {@code day}, after {@code after} in id order. */
+    @Transactional(readOnly = true)
+    public List<UUID> findAccountsToAccrue(LocalDate day, UUID after) {
+        return accounts.findSavingsNotAccruedThrough(day, after, PageRequest.of(0, BATCH_SIZE));
     }
 
     /**
@@ -245,7 +254,13 @@ public class InterestService {
     /** Savings accounts with something whole to pay. Drives the monthly capitalisation run. */
     @Transactional(readOnly = true)
     public List<UUID> findAccountsToCapitalise() {
-        return accounts.findSavingsWithAccruedInterest(PageRequest.of(0, BATCH_SIZE));
+        return findAccountsToCapitalise(FIRST);
+    }
+
+    /** The next batch with something whole to pay, after {@code after} in id order. */
+    @Transactional(readOnly = true)
+    public List<UUID> findAccountsToCapitalise(UUID after) {
+        return accounts.findSavingsWithAccruedInterest(after, PageRequest.of(0, BATCH_SIZE));
     }
 
     /** Today, as the accrual run reckons it. */
