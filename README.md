@@ -497,8 +497,21 @@ The money comes from somewhere, which is what makes it a posting rather than an 
 
 Accrual is idempotent per day. `interest_accrued_through` means a crashed run, a restart, or a
 second replica cannot pay the same day twice, which is also why the runner can tick hourly: the
-extra ticks pick up accounts opened since the last one and finish oversized batches, and a
-once-a-day schedule would let a badly timed restart cost a day.
+extra ticks pick up accounts opened since the last one, and a once-a-day schedule would let a
+badly timed restart cost a day.
+
+**Each tick reaches every account, however many there are.** A tick used to fetch one batch of
+200, work through it and stop, leaving the rest to later ticks. That capped accrual at 4,800
+accounts a day, and each day began again from the lowest id. Past that, the same accounts were
+missed every day and never earned at all. The day's catch-up didn't help, since it only runs on
+an account the run reaches. Capitalisation had the same ceiling on the 1st, and worse: an
+account whose capitalisation fails keeps its interest, so it stayed in the first batch and took
+a place in it on every tick. 200 such accounts would have stopped everyone else being paid.
+
+Now a tick fetches batch after batch until none is left. Each batch starts after the last id of
+the one before (keyset paging from an all-zero UUID), so a failing account is passed over
+rather than fetched again. Each account is still accrued or paid in its own transaction, so
+one failure cannot roll back the others.
 
 **A day with no tick at all is caught up, not lost.** Hourly ticks cover a restart, not a whole
 UTC day without one: a deploy left down overnight, a crash loop, a database outage. The run only
