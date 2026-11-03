@@ -757,7 +757,10 @@ account was left with a balance. Now:
   paid out"). A fraction of a paisa cannot be paid in real money, so it does not block.
 - `POST /accounts/{id}/interest/pay-out` pays it now rather than on the first. It needs no
   idempotency key: what it pays comes off the accrued figure in the same transaction, so a retry
-  finds nothing left and gets `NO_INTEREST_PAYABLE`.
+  finds nothing left and gets `NO_INTEREST_PAYABLE`. On the account page, the status card offers
+  it to tellers and admins as "Pay out ₹19.17" whenever at least a paisa is payable and the
+  account is not closed. Without that, an admin closing a savings account from the browser met a
+  refusal they had no way to act on.
 - What is attached is reported before what is in the account. Paying interest out adds to the
   balance, so the order that works is: pay out, empty, close. Reporting the balance first sent
   staff round twice.

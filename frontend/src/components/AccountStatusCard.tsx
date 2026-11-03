@@ -1,7 +1,13 @@
 import { useState, type FormEvent } from "react";
-import { useAccountStatusChanges, useChangeAccountStatus, type AccountStatusAction } from "../api/hooks";
+import {
+  useAccountStatusChanges,
+  useChangeAccountStatus,
+  usePayOutInterest,
+  type AccountStatusAction,
+} from "../api/hooks";
 import type { Account, AccountStatus } from "../api/types";
-import { formatDateTime } from "../format";
+import { formatAmount, formatDateTime } from "../format";
+import { canPayOutInterest, payableInterest } from "../interest";
 import { ErrorBanner } from "./ErrorBanner";
 import { StatusPill } from "./StatusPill";
 
@@ -44,6 +50,7 @@ export function AccountStatusCard({ account, admin }: { account: Account; admin:
     <div className="card">
       <h3>Account status</h3>
       <ErrorBanner error={error} />
+      {canPayOutInterest(account) && <InterestPayOut account={account} />}
       {/* Keyed on the status so a change resets the form to the actions that make sense now. */}
       {actions.length > 0 && <StatusChangeForm key={account.status} accountId={account.id} actions={actions} />}
 
@@ -86,6 +93,29 @@ export function AccountStatusCard({ account, admin }: { account: Account; admin:
           Next
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Interest is paid on the 1st, and closure is refused while any is still owed. This is how staff
+ * settle it on the spot: pay it out, empty the account, then close it. Tellers may as well as
+ * admins -- it is the backend's rule too.
+ */
+function InterestPayOut({ account }: { account: Account }) {
+  const payOut = usePayOutInterest(account.id);
+  const amount = formatAmount(payableInterest(account.accruedInterest), account.currency);
+
+  return (
+    <div style={{ marginBottom: "1rem" }}>
+      <ErrorBanner error={payOut.error} />
+      <p className="muted">
+        Interest accrued since the last payout is paid on the 1st. An account cannot be closed while
+        any is owed, so pay it out before emptying and closing it.
+      </p>
+      <button className="btn" type="button" disabled={payOut.isPending} onClick={() => payOut.mutate()}>
+        Pay out {amount}
+      </button>
     </div>
   );
 }

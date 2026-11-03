@@ -240,6 +240,20 @@ export function useChangeAccountStatus() {
   });
 }
 
+/**
+ * Pays an account's accrued interest out now rather than on the 1st. Staff only. The backend pays
+ * whole paise and refuses with NO_INTEREST_PAYABLE when there are none, so a double click cannot pay
+ * twice. It is a posting, so everything a deposit refreshes is refreshed here too.
+ */
+export function usePayOutInterest(accountId: string) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<Transaction>(`/accounts/${accountId}/interest/pay-out`),
+    onSuccess: () => invalidateAfterPosting(queryClient, [accountId]),
+  });
+}
+
 /** Holds on one account, newest first. Readable by the account's owner as well as staff. */
 export function useHolds(accountId: string, page: number) {
   const api = useApi();
