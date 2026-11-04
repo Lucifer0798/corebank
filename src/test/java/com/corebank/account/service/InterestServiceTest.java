@@ -219,9 +219,11 @@ class InterestServiceTest {
         // "accrued_through < today" alone would never see one and it would earn nothing, ever.
         LocalDate today = interestService.today();
 
-        assertThat(interestService.findAccountsToAccrue(today)).contains(accountId);
+        // Every batch, not the first: the shared database can hold more than a batch of accounts
+        // due today, and this one can sort past it -- see DueAccounts.
+        assertThat(DueAccounts.toAccrue(interestService, today)).contains(accountId);
 
         interestService.accrue(accountId, today);
-        assertThat(interestService.findAccountsToAccrue(today)).doesNotContain(accountId);
+        assertThat(DueAccounts.toAccrue(interestService, today)).doesNotContain(accountId);
     }
 }

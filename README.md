@@ -29,7 +29,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
 | FX | Cross-currency transfers, posted as four legs through per-currency position accounts, with the book valued and marked to market. |
-| Interest | Savings balances accrue daily at full scale and capitalise monthly as a real posting. |
+| Interest | Savings balances accrue daily at full scale and capitalise monthly as a real posting, from the 1st until paid. |
 | Velocity limits | A per-account daily debit ceiling and a per-posting ceiling, counted from the ledger. |
 | Holds | Authorisation holds reserve money without posting it. Captured, released, or expired by a sweep. |
 | Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner, set up and cancelled from the account page. |
@@ -537,6 +537,25 @@ whose accrued-through date stopped at the freeze, would be paid for its frozen d
 run. Before deploying, `select account_number, interest_accrued_through from account where
 account_type = 'SAVINGS' and status = 'ACTIVE' and interest_accrued_through < current_date - 1`
 lists every account the first run will catch up.
+
+**A 1st with no tick is paid the next day, not next month.** Capitalisation used to run on the
+1st and only on the 1st, so a 1st without a single tick meant every account missed that month's
+payment. Nothing was lost: the interest stayed accrued. But nothing was paid until the next 1st,
+which then paid both months together, and the late month compounded a month late. Now every
+tick runs the payout, and `account.interest_capitalised_on` (V22) records the day each account
+was last paid. An account is due when it has a whole paisa to pay, has not been paid since this
+month's 1st, and has been open since before the 1st, so an account opened mid-month still waits
+for the next 1st. A staff pay-out records the day as well, so it counts as that month's payment.
+
+The payout pays whatever is accrued when it runs. A catch-up on the 3rd therefore also pays the
+1st to the 3rd. An on-time payout already includes the 1st, so this only pays a missed month's
+first few days early. Splitting accrued interest by month would take much more machinery than
+those few days are worth. One more edge: an account with less than a paisa accrued on the 1st is
+paid on the day it reaches one, rather than waiting for the next 1st.
+
+V22 back-fills the new column from each account's latest interest posting, as a UTC date.
+Without that, every account would read as never paid, and all of them would be paid again,
+early, on deploy day.
 
 Because capitalised interest joins the balance, the product **compounds** — a year of daily accrual
 on ₹10,000 pays about ₹355.67 rather than the ₹350.00 of simple interest. The test bounds it from

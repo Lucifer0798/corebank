@@ -12,6 +12,7 @@ import com.corebank.account.domain.AccountType;
 import com.corebank.account.dto.OpenAccountRequest;
 import com.corebank.account.repository.AccountRepository;
 import com.corebank.account.service.AccountService;
+import com.corebank.account.service.DueAccounts;
 import com.corebank.account.service.InterestService;
 import com.corebank.common.exception.BusinessRuleException;
 import com.corebank.config.TestDeciders;
@@ -166,7 +167,10 @@ class ClosedAccountInterestTest {
             account.setClosedAt(Instant.now());
         });
 
-        assertThat(interestService.findAccountsToCapitalise()).doesNotContain(accountId);
+        // On the next 1st, when it would otherwise be due: open since before then, never paid.
+        LocalDate nextFirst = interestService.today().plusMonths(1).withDayOfMonth(1);
+        // Every batch: "not in the first batch" would hold whether or not it was excluded.
+        assertThat(DueAccounts.toCapitalise(interestService, nextFirst)).doesNotContain(accountId);
         assertThatThrownBy(() -> interestService.capitalise(accountId))
                 .isInstanceOf(BusinessRuleException.class)
                 .extracting(ClosedAccountInterestTest::codeOf).isEqualTo("ACCOUNT_CLOSED");

@@ -114,14 +114,23 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
      *
      * <p>Paged after {@code after} for the same reason as {@link #findSavingsNotAccruedThrough}: an
      * account whose capitalisation fails keeps its interest, so it would head every first page.
+     *
+     * <p>Only accounts not yet paid this month -- {@code monthStart} is its 1st -- and open since
+     * before it began. The first is what lets every tick run this, so a 1st the run never reached is
+     * paid on the next one rather than a month later; the second keeps an account opened mid-month
+     * waiting for the next 1st, as it always has.
      */
     @Query("""
             select a.id from Account a
              where a.accountType = com.corebank.account.domain.AccountType.SAVINGS
                and a.status <> com.corebank.account.domain.AccountStatus.CLOSED
                and a.accruedInterest >= 0.01
+               and (a.interestCapitalisedOn is null or a.interestCapitalisedOn < :monthStart)
+               and a.openedAt < :monthBegan
                and a.id > :after
              order by a.id asc
             """)
-    List<UUID> findSavingsWithAccruedInterest(@Param("after") UUID after, Pageable pageable);
+    List<UUID> findSavingsWithAccruedInterest(@Param("monthStart") LocalDate monthStart,
+                                              @Param("monthBegan") java.time.Instant monthBegan,
+                                              @Param("after") UUID after, Pageable pageable);
 }

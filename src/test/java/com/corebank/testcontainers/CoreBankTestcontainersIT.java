@@ -859,6 +859,31 @@ class CoreBankTestcontainersIT {
                 .containsOnly(today);
     }
 
+    @Test
+    @Order(14)
+    @DisplayName("the payout back-fill records UTC's date on real Postgres, whatever the session's zone")
+    void theCapitalisationBackFillIsUtcOnPostgres() {
+        // V22 back-fills each account's last payout from its latest interest posting. The run reckons
+        // days in UTC, so a payout late on the 1st in UTC -- already the 2nd in India -- must read as
+        // the 1st, or the account would look paid in the wrong month. Run here with the session in
+        // India on purpose: production databases are not always set to UTC.
+        String accountId = fundedAccount(new BigDecimal("10000.00"));
+        UUID id = UUID.fromString(accountId);
+        interestService.accrue(id, java.time.LocalDate.of(2026, 9, 30));
+        String reference = interestService.capitalise(id, java.time.LocalDate.of(2026, 10, 1)).orElseThrow();
+        jdbc.update("update bank_transaction set posted_at = ? where reference = ?",
+                java.sql.Timestamp.from(java.time.Instant.parse("2026-10-01T22:00:00Z")), reference);
+        jdbc.update("update account set interest_capitalised_on = null where id = ?", id);
+
+        com.corebank.config.MigrationSql.runFor(jdbc,
+                com.corebank.config.MigrationSql.statement(
+                        "V22__interest_capitalised_on.sql", "UPDATE account"),
+                "Asia/Kolkata", id);
+
+        assertThat(accountRepository.findById(id).orElseThrow().getInterestCapitalisedOn())
+                .isEqualTo(java.time.LocalDate.of(2026, 10, 1));
+    }
+
     private void assertOneOfThreeRefused(List<Integer> statuses, String accountId) {
         assertThat(statuses).as("two debits fit under the daily limit and the third does not")
                 .containsExactlyInAnyOrder(201, 201, 422);

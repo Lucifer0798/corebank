@@ -190,11 +190,10 @@ class PostingAttributionTest {
         UUID account = UUID.randomUUID();
         AtomicReference<Actor> seen = new AtomicReference<>();
         when(interest.today()).thenReturn(LocalDate.of(2026, 11, 1));
-        when(interest.isCapitalisationDay()).thenReturn(true);
         // Unstubbed calls return an empty list, which is what ends each batch loop.
-        when(interest.findAccountsToCapitalise(com.corebank.account.service.InterestService.FIRST))
+        when(interest.findAccountsToCapitalise(LocalDate.of(2026, 11, 1), com.corebank.account.service.InterestService.FIRST))
                 .thenReturn(List.of(account));
-        when(interest.capitalise(account)).thenAnswer(invocation -> {
+        when(interest.capitalise(account, LocalDate.of(2026, 11, 1))).thenAnswer(invocation -> {
             seen.set(Actors.current());
             return java.util.Optional.of("TXN-INTEREST");
         });

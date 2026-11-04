@@ -12,8 +12,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Adds a day's interest to every savings account, and on the first of the month turns what has
- * accumulated into a posting.
+ * Adds a day's interest to every savings account, and once a month -- from the 1st, until it is
+ * done -- turns what has accumulated into a posting.
  *
  * <p>Ticking more often than once a day is intentional and harmless: {@code Account} refuses a day
  * it has already been accrued for, so the extra ticks are how the run catches accounts opened since
@@ -53,9 +53,10 @@ public class InterestRunner {
     private void accrueAndCapitalise() {
         LocalDate today = interestService.today();
         accrueAll(today);
-        if (interestService.isCapitalisationDay()) {
-            capitaliseAll();
-        }
+        // Every tick, not only on the 1st. Only accounts not yet paid this month are due, so this
+        // pays each one once a month -- on the 1st as before, or on the first tick after a 1st the
+        // run never reached, rather than a month late.
+        capitaliseAll(today);
     }
 
     void accrueAll(LocalDate today) {
@@ -74,13 +75,13 @@ public class InterestRunner {
         }
     }
 
-    void capitaliseAll() {
+    void capitaliseAll(LocalDate today) {
         UUID after = InterestService.FIRST;
-        for (List<UUID> batch = interestService.findAccountsToCapitalise(after); !batch.isEmpty();
-                batch = interestService.findAccountsToCapitalise(after)) {
+        for (List<UUID> batch = interestService.findAccountsToCapitalise(today, after); !batch.isEmpty();
+                batch = interestService.findAccountsToCapitalise(today, after)) {
             for (UUID id : batch) {
                 try {
-                    interestService.capitalise(id);
+                    interestService.capitalise(id, today);
                 } catch (RuntimeException ex) {
                     log.warn("Could not capitalise interest on account {}: {}", id, ex.toString());
                 }
