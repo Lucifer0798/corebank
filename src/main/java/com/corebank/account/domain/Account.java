@@ -135,6 +135,14 @@ public class Account extends AuditableEntity {
     private LocalDate interestAccruedThrough;
 
     /**
+     * The day interest was last paid out of {@link #accruedInterest} into the balance. An account is
+     * due again from the next 1st, which is what lets a 1st the run never reached be paid the day
+     * after instead of a month later. Null until the first payout.
+     */
+    @Column(name = "interest_capitalised_on")
+    private LocalDate interestCapitalisedOn;
+
+    /**
      * Adds one day's interest, at full scale.
      *
      * <p>Idempotent by date rather than by trust: an accrual run that crashes and restarts, or two

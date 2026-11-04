@@ -61,6 +61,11 @@ class InterestRunnerBatchTest {
         @Autowired private AccountRepository accounts;
         @Autowired private JdbcTemplate jdbc;
 
+        /** The next 1st: when accounts opened today are first due a payout. */
+        private LocalDate nextFirst() {
+            return interestService.today().plusMonths(1).withDayOfMonth(1);
+        }
+
         /** Savings accounts across enough customers to stay under the per-customer limit. */
         private List<UUID> savingsAccounts(int count, String deposit) {
             List<UUID> ids = new ArrayList<>();
@@ -110,13 +115,33 @@ class InterestRunnerBatchTest {
 
             InterestRunner runner = new InterestRunner(interestService);
             assertTimeoutPreemptively(Duration.ofSeconds(120),
-                    () -> Actors.runAs(InterestRunner.ACTOR, runner::capitaliseAll));
+                    () -> Actors.runAs(InterestRunner.ACTOR, () -> runner.capitaliseAll(nextFirst())));
 
             // 0.9589 accrued: 0.95 paid, 0.0089 carried.
             assertThat(accounts.findAllById(ids)).extracting(Account::getBalance)
                     .hasSize(MORE_THAN_A_BATCH - 1)
                     .allSatisfy(balance -> assertThat(balance).isEqualByComparingTo("10000.95"));
             assertThat(accounts.findById(failing).orElseThrow().getAccruedInterest()).isEqualByComparingTo("0.9589");
+        }
+    }
+
+    @Nested
+    @DisplayName("on every tick")
+    class OnEveryTick {
+
+        @Test
+        @DisplayName("a tick on the 2nd still runs the payout -- not only a tick on the 1st")
+        void theSecondRunsThePayout() {
+            // Which accounts are due is the query's business (see CapitalisationScheduleTest). The
+            // runner's is only to ask on every tick: asking on the 1st alone is what let a 1st with
+            // no tick cost every account that month's payment.
+            InterestService interest = mock(InterestService.class);
+            LocalDate second = LocalDate.of(2026, 11, 2);
+            when(interest.today()).thenReturn(second);
+
+            new InterestRunner(interest).run();
+
+            org.mockito.Mockito.verify(interest).findAccountsToCapitalise(second, InterestService.FIRST);
         }
     }
 
@@ -175,13 +200,13 @@ class InterestRunnerBatchTest {
         @DisplayName("accounts that always fail do not stop capitalisation reaching the rest")
         void failuresDoNotBlockCapitalisation() {
             InterestService interest = mock(InterestService.class);
-            when(interest.findAccountsToCapitalise(any())).thenAnswer(call -> pageAfter(call.getArgument(0)));
-            when(interest.capitalise(any())).thenAnswer(call -> {
+            when(interest.findAccountsToCapitalise(eq(today), any())).thenAnswer(call -> pageAfter(call.getArgument(1)));
+            when(interest.capitalise(any(), eq(today))).thenAnswer(call -> {
                 work(call.getArgument(0));
                 return Optional.of("TXN-INTEREST");
             });
 
-            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> new InterestRunner(interest).capitaliseAll());
+            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> new InterestRunner(interest).capitaliseAll(today));
 
             assertThat(done).containsExactlyInAnyOrderElementsOf(healthy);
         }

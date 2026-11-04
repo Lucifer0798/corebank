@@ -107,11 +107,6 @@ public class InterestService {
         return balance.multiply(dailyRate).setScale(4, RoundingMode.HALF_UP);
     }
 
-    @Transactional(readOnly = true)
-    public List<UUID> findAccountsToAccrue(LocalDate day) {
-        return findAccountsToAccrue(day, FIRST);
-    }
-
     /** The next batch still to accrue for {@code day}, after {@code after} in id order. */
     @Transactional(readOnly = true)
     public List<UUID> findAccountsToAccrue(LocalDate day, UUID after) {
@@ -194,6 +189,15 @@ public class InterestService {
      */
     @Transactional
     public java.util.Optional<String> capitalise(UUID accountId) {
+        return capitalise(accountId, today());
+    }
+
+    /**
+     * As above, recorded as paid on {@code on} -- the day the run reckons it is. The account is not
+     * due again until the 1st after it.
+     */
+    @Transactional
+    public java.util.Optional<String> capitalise(UUID accountId, LocalDate on) {
         Account account = accountService.requireForUpdate(accountId);
         // Refused rather than skipped, so that whoever asked hears why. The ledger itself does not
         // check -- a credit applies to any account -- and interest left on an account closed before
@@ -208,6 +212,7 @@ public class InterestService {
             return java.util.Optional.empty();
         }
         account.takeCapitalisableInterest();
+        account.setInterestCapitalisedOn(on);
 
         // Interest expense in the account's own currency. Hardcoding the rupee account here meant
         // a dollar savings account could accrue interest but never be paid it -- see V12.
@@ -251,26 +256,20 @@ public class InterestService {
                                 + accountService.require(accountId).getAccruedInterest() + " is accrued"));
     }
 
-    /** Savings accounts with something whole to pay. Drives the monthly capitalisation run. */
+    /**
+     * The next batch due a payout on {@code today}, after {@code after} in id order: something whole
+     * to pay, not yet paid this month, and open since before the month began.
+     */
     @Transactional(readOnly = true)
-    public List<UUID> findAccountsToCapitalise() {
-        return findAccountsToCapitalise(FIRST);
-    }
-
-    /** The next batch with something whole to pay, after {@code after} in id order. */
-    @Transactional(readOnly = true)
-    public List<UUID> findAccountsToCapitalise(UUID after) {
-        return accounts.findSavingsWithAccruedInterest(after, PageRequest.of(0, BATCH_SIZE));
+    public List<UUID> findAccountsToCapitalise(LocalDate today, UUID after) {
+        LocalDate monthStart = today.withDayOfMonth(1);
+        return accounts.findSavingsWithAccruedInterest(monthStart,
+                monthStart.atStartOfDay(ZoneOffset.UTC).toInstant(), after, PageRequest.of(0, BATCH_SIZE));
     }
 
     /** Today, as the accrual run reckons it. */
     public LocalDate today() {
         return LocalDate.now(clock.withZone(ZoneOffset.UTC));
-    }
-
-    /** Whether today is a capitalisation day -- the first of the month. */
-    public boolean isCapitalisationDay() {
-        return today().getDayOfMonth() == 1;
     }
 
     static AccountType interestBearingType() {
