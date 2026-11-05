@@ -7,22 +7,27 @@ import com.corebank.common.exception.ResourceNotFoundException;
 import com.corebank.common.security.Actors;
 import com.corebank.customer.domain.Customer;
 import com.corebank.customer.domain.CustomerStatus;
+import com.corebank.customer.domain.CustomerStatusChange;
 import com.corebank.customer.domain.IdentityLink;
 import com.corebank.customer.domain.KycDecider;
 import com.corebank.customer.domain.KycDecision;
 import com.corebank.customer.domain.KycStatus;
 import com.corebank.customer.dto.CreateCustomerRequest;
 import com.corebank.customer.dto.CustomerResponse;
+import com.corebank.customer.dto.CustomerStatusChangeResponse;
 import com.corebank.customer.dto.IdentityLinkResponse;
 import com.corebank.customer.dto.KycDecisionResponse;
 import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.customer.repository.CustomerRepository;
+import com.corebank.customer.repository.CustomerStatusChangeRepository;
 import com.corebank.customer.repository.IdentityLinkRepository;
 import com.corebank.customer.repository.KycDecisionRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Period;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -42,11 +47,16 @@ public class CustomerService {
     private final ApplicationEventPublisher eventPublisher;
     private final KycDecisionRepository decisions;
     private final IdentityLinkRepository identityLinks;
+    private final CustomerStatusChangeRepository statusChanges;
+    private final List<CustomerClosureCheck> closureChecks;
 
     public CustomerService(CustomerRepository customers, SequenceNumberGenerator sequences, Clock clock,
                             ApplicationEventPublisher eventPublisher, KycDecisionRepository decisions,
-                            IdentityLinkRepository identityLinks) {
+                            IdentityLinkRepository identityLinks, CustomerStatusChangeRepository statusChanges,
+                            List<CustomerClosureCheck> closureChecks) {
         this.customers = customers;
+        this.statusChanges = statusChanges;
+        this.closureChecks = closureChecks;
         this.identityLinks = identityLinks;
         this.decisions = decisions;
         this.sequences = sequences;
@@ -192,6 +202,75 @@ public class CustomerService {
     public Page<KycDecisionResponse> kycDecisions(UUID id, Pageable pageable) {
         require(id);
         return decisions.findByCustomerIdOrderByDecidedAtDescSeqDesc(id, pageable).map(KycDecisionResponse::from);
+    }
+
+    /**
+     * Suspends, reinstates or closes a customer, and records who did it and why.
+     *
+     * <p>Suspending stops what {@link Customer#canSendMoney()} and {@link Customer#canOpenAccounts()}
+     * have always guarded: money leaving, and new accounts. It is read live, so reinstating lifts it at
+     * once, and there is nothing on each account to undo. Payments in still arrive, as they do for a
+     * customer whose KYC has lapsed.
+     *
+     * <p>Closing is final, and refused while anything is still attached -- see
+     * {@link CustomerClosureCheck}. The record stays: the ledger and these histories point at it.
+     *
+     * <p>A reason is required to suspend or close, since each is a decision somebody will be asked
+     * about. A change to the status the customer already has is refused rather than recorded -- a
+     * history full of non-events hides the ones that mattered.
+     */
+    @Transactional
+    public CustomerResponse changeStatus(UUID id, CustomerStatus target, String reason) {
+        Customer customer = requireForUpdate(id);
+        if (customer.getStatus() == CustomerStatus.CLOSED) {
+            throw new BusinessRuleException("CUSTOMER_CLOSED", "A closed customer cannot be changed");
+        }
+        if (customer.getStatus() == target) {
+            throw new BusinessRuleException("STATUS_UNCHANGED",
+                    "Customer " + customer.getCustomerNumber() + " is already " + target.name().toLowerCase());
+        }
+        String statedReason = reason == null || reason.isBlank() ? null : reason.strip();
+        if (target != CustomerStatus.ACTIVE && statedReason == null) {
+            throw new BusinessRuleException("STATUS_REASON_REQUIRED",
+                    "Say why: suspending or closing a customer is kept with the reason it was done");
+        }
+        if (target == CustomerStatus.CLOSED) {
+            assertNothingOutstanding(customer);
+        }
+
+        statusChanges.save(new CustomerStatusChange(customer.getId(), customer.getStatus(), target,
+                Actors.current(), statedReason, Instant.now(clock)));
+        customer.setStatus(target);
+        // Search shows a customer's status, and it only hears about changes through this.
+        eventPublisher.publishEvent(CustomerChangedEvent.from(customer));
+        return CustomerResponse.from(customer);
+    }
+
+    /** Lists everything outstanding at once, so staff clear it in one pass. */
+    private void assertNothingOutstanding(Customer customer) {
+        List<String> outstanding = closureChecks.stream()
+                .map(check -> check.outstandingFor(customer.getId()))
+                .flatMap(Optional::stream)
+                .toList();
+        if (!outstanding.isEmpty()) {
+            throw new BusinessRuleException("CLOSURE_BLOCKED",
+                    "Customer " + customer.getCustomerNumber() + " still has " + String.join(" and ", outstanding)
+                            + "; settle them before closing the customer");
+        }
+    }
+
+    /** Every suspension, reinstatement and closure of this customer, newest first. */
+    @Transactional(readOnly = true)
+    public Page<CustomerStatusChangeResponse> statusHistory(UUID id, Pageable pageable) {
+        require(id);
+        return statusChanges.findByCustomerIdOrderByChangedAtDescSeqDesc(id, pageable)
+                .map(CustomerStatusChangeResponse::from);
+    }
+
+    /** Loads a customer with its row lock, for anything whose check must still hold at commit. */
+    public Customer requireForUpdate(UUID id) {
+        return customers.findByIdForUpdate(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer", id));
     }
 
     /** Loads a customer for other services, raising the standard 404 when absent. */

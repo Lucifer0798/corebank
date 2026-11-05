@@ -253,7 +253,7 @@ public class Account extends AuditableEntity {
 
     /**
      * Guards for money <em>leaving</em> this account: everything {@link #assertPostable()} checks,
-     * and that its owner is still KYC-verified.
+     * and that its owner is still active and KYC-verified.
      *
      * <p>Outgoing only, deliberately. Payments in still arrive -- a salary, a refund, interest -- so
      * a customer under review is restricted rather than cut off, and nobody paying them has a
@@ -266,6 +266,13 @@ public class Account extends AuditableEntity {
     public void assertCanSendMoney() {
         assertPostable();
         if (isCustomerAccount() && !customer.canSendMoney()) {
+            // A separate refusal, since telling staff a suspended customer "is not KYC-verified"
+            // would send them to the wrong card to lift it.
+            if (customer.getStatus() != com.corebank.customer.domain.CustomerStatus.ACTIVE) {
+                throw new BusinessRuleException("CUSTOMER_NOT_ACTIVE",
+                        "The owner of account " + accountNumber + " is " + customer.getStatus().name().toLowerCase()
+                                + ", so money cannot leave it; payments into it still arrive");
+            }
             throw new BusinessRuleException("CUSTOMER_NOT_VERIFIED",
                     "The owner of account " + accountNumber + " is not KYC-verified, so money cannot leave "
                             + "it; payments into it still arrive");

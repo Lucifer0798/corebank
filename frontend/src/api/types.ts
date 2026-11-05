@@ -71,6 +71,17 @@ export interface AccountStatusChange {
 }
 
 /** Mirrors com.corebank.customer.dto.KycDecisionResponse. History starts when it was introduced. */
+export interface CustomerStatusChange {
+  id: string;
+  fromStatus: CustomerStatus;
+  toStatus: CustomerStatus;
+  changedBySubject: string;
+  changedByName: string | null;
+  /** Always present on a suspension or a closure. */
+  reason: string | null;
+  changedAt: string;
+}
+
 export interface KycDecision {
   id: string;
   fromStatus: KycStatus;

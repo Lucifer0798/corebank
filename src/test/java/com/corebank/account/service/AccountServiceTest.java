@@ -87,7 +87,7 @@ class AccountServiceTest {
     }
 
     private void stubEligibleCustomer() {
-        when(customerService.require(any(UUID.class))).thenReturn(customer);
+        when(customerService.requireForUpdate(any(UUID.class))).thenReturn(customer);
     }
 
     @Test

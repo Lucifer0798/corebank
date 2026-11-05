@@ -78,6 +78,15 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
     @Query("select count(a) from Account a where a.customer.id = :customerId and a.status <> com.corebank.account.domain.AccountStatus.CLOSED")
     long countOpenAccounts(@Param("customerId") UUID customerId);
 
+    /** The numbers of a customer's accounts that are not closed: what stops the customer closing. */
+    @Query("""
+            select a.accountNumber from Account a
+             where a.customer.id = :customerId
+               and a.status <> com.corebank.account.domain.AccountStatus.CLOSED
+             order by a.accountNumber asc
+            """)
+    List<String> findOpenAccountNumbers(@Param("customerId") UUID customerId);
+
     /**
      * Savings accounts that have not yet been accrued for {@code day}.
      *
