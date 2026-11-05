@@ -884,6 +884,68 @@ class CoreBankTestcontainersIT {
                 .isEqualTo(java.time.LocalDate.of(2026, 10, 1));
     }
 
+    @Test
+    @Order(15)
+    @DisplayName("a customer is suspended, reinstated and closed with real tokens on real Postgres")
+    void customerLifecycleOnPostgres() {
+        // CustomerLifecycleTest covers the rules on H2 with mocked tokens. This is V23's table, its
+        // identity column and its constraints on the real database, the row lock opening an account
+        // now takes, and the roles and the recorded name coming from a token Keycloak really issued.
+        String accountId = fundedAccount(new BigDecimal("500.00"));
+        String customerId = given().header("Authorization", "Bearer " + tellerToken)
+                .get("/accounts/{id}", accountId)
+                .then().statusCode(200).extract().path("customerId");
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON).body(Map.of("reason", "Fraud report"))
+                .post("/customers/{id}/suspend", customerId)
+                .then().statusCode(403);
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON).body(Map.of("reason", "Fraud report"))
+                .post("/customers/{id}/suspend", customerId)
+                .then().statusCode(200).body("status", equalTo("SUSPENDED"));
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", "tc-lifecycle-refused-" + UUID.randomUUID())
+                .contentType(ContentType.JSON).body(Map.of("amount", new BigDecimal("100.00")))
+                .post("/accounts/{id}/withdrawals", accountId)
+                .then().statusCode(422).body("code", equalTo("CUSTOMER_NOT_ACTIVE"));
+        given().header("Authorization", "Bearer " + tellerToken)
+                .contentType(ContentType.JSON).body(Map.of("customerId", customerId, "accountType", "SAVINGS"))
+                .post("/accounts")
+                .then().statusCode(422).body("code", equalTo("CUSTOMER_NOT_ELIGIBLE"));
+
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON).body(Map.of())
+                .post("/customers/{id}/reinstate", customerId)
+                .then().statusCode(200).body("status", equalTo("ACTIVE"));
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON).body(Map.of("reason", "Left the bank"))
+                .post("/customers/{id}/close", customerId)
+                .then().statusCode(422).body("code", equalTo("CLOSURE_BLOCKED"));
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", "tc-lifecycle-empty-" + UUID.randomUUID())
+                .contentType(ContentType.JSON).body(Map.of("amount", new BigDecimal("500.00")))
+                .post("/accounts/{id}/withdrawals", accountId)
+                .then().statusCode(201);
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON).body(Map.of("reason", "Customer request"))
+                .post("/accounts/{id}/close", accountId)
+                .then().statusCode(200);
+        given().header("Authorization", "Bearer " + adminToken)
+                .contentType(ContentType.JSON).body(Map.of("reason", "Left the bank"))
+                .post("/customers/{id}/close", customerId)
+                .then().statusCode(200).body("status", equalTo("CLOSED"));
+
+        var history = given().header("Authorization", "Bearer " + tellerToken)
+                .get("/customers/{id}/status-changes", customerId)
+                .then().statusCode(200).extract();
+        assertThat(history.<List<String>>path("content.toStatus")).containsExactly("CLOSED", "ACTIVE", "SUSPENDED");
+        assertThat(history.<List<String>>path("content.reason")).containsExactly("Left the bank", null, "Fraud report");
+        assertThat(history.<List<String>>path("content.changedByName")).doesNotContainNull();
+    }
+
     private void assertOneOfThreeRefused(List<Integer> statuses, String accountId) {
         assertThat(statuses).as("two debits fit under the daily limit and the third does not")
                 .containsExactlyInAnyOrder(201, 201, 422);

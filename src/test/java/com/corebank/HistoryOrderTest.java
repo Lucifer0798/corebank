@@ -64,6 +64,7 @@ class HistoryOrderTest {
     @Autowired private AccountService accountService;
     @Autowired private ScheduledTransferService scheduledTransfers;
     @Autowired private KycDecisionRepository kycDecisions;
+    @Autowired private com.corebank.customer.repository.CustomerStatusChangeRepository customerStatusChanges;
     @Autowired private AccountStatusChangeRepository statusChanges;
     @Autowired private IdentityLinkRepository identityLinks;
     @Autowired private ScheduledTransferEventRepository scheduleEvents;
@@ -93,6 +94,23 @@ class HistoryOrderTest {
 
     private static PageRequest firstPage() {
         return PageRequest.of(0, TIED + 5);
+    }
+
+    @Test
+    @DisplayName("customer status changes made at the same instant read back in the order they were made")
+    void customerStatusChangeTies() {
+        for (int i = 0; i < TIED; i++) {
+            customerStatusChanges.save(new com.corebank.customer.domain.CustomerStatusChange(customer,
+                    com.corebank.customer.domain.CustomerStatus.ACTIVE,
+                    com.corebank.customer.domain.CustomerStatus.SUSPENDED, STAFF, "#" + i, AT));
+        }
+        customerStatusChanges.save(new com.corebank.customer.domain.CustomerStatusChange(customer,
+                com.corebank.customer.domain.CustomerStatus.ACTIVE,
+                com.corebank.customer.domain.CustomerStatus.SUSPENDED, STAFF, "older", AT.minusSeconds(1)));
+
+        assertThat(customerService.statusHistory(customer, firstPage()).getContent())
+                .extracting(com.corebank.customer.dto.CustomerStatusChangeResponse::reason)
+                .containsExactlyElementsOf(newestFirst());
     }
 
     @Test

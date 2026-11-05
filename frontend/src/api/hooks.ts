@@ -21,10 +21,12 @@ import type {
   ScheduledTransferEvent,
   SearchResponse,
   StatementLine,
+  CustomerStatusChange,
   Transaction,
   TransactionSearchHit,
   TransactionType,
 } from "./types";
+import type { CustomerStatusAction } from "../customerStatus";
 
 /** Binds the current access token to every call, so hooks below never touch auth directly. */
 function useApi() {
@@ -108,6 +110,37 @@ export function useUpdateKyc(customerId: string) {
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       queryClient.invalidateQueries({ queryKey: ["kycDecisions", customerId] });
     },
+  });
+}
+
+export interface CustomerStatusChangeInput {
+  action: CustomerStatusAction;
+  /** Required by the backend to suspend or close; kept with who did it. */
+  reason?: string;
+}
+
+/** Who did it is taken from the caller's token on the backend, so it is not something this sends. */
+export function useChangeCustomerStatus(customerId: string) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, reason }: CustomerStatusChangeInput) =>
+      api.post<Customer>(`/customers/${customerId}/${action}`, { reason }),
+    onSuccess: (customer) => {
+      queryClient.setQueryData(["customer", customerId], customer);
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["customerStatusChanges", customerId] });
+    },
+  });
+}
+
+/** Every suspension, reinstatement and closure of a customer, newest first. Staff only. */
+export function useCustomerStatusChanges(customerId: string, page: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["customerStatusChanges", customerId, page],
+    queryFn: () =>
+      api.get<PagedResponse<CustomerStatusChange>>(`/customers/${customerId}/status-changes`, { page, size: 10 }),
   });
 }
 

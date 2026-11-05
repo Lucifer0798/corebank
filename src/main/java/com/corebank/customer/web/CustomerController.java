@@ -6,7 +6,10 @@ import com.corebank.customer.dto.IdentityLinkResponse;
 import com.corebank.common.web.PagedResponse;
 import com.corebank.customer.domain.KycDecider;
 import com.corebank.customer.dto.CreateCustomerRequest;
+import com.corebank.customer.domain.CustomerStatus;
 import com.corebank.customer.dto.CustomerResponse;
+import com.corebank.customer.dto.CustomerStatusChangeRequest;
+import com.corebank.customer.dto.CustomerStatusChangeResponse;
 import com.corebank.customer.dto.KycDecisionResponse;
 import com.corebank.customer.dto.LinkIdentityRequest;
 import com.corebank.customer.dto.UpdateKycRequest;
@@ -87,6 +90,48 @@ public class CustomerController {
                                       @AuthenticationPrincipal Jwt jwt) {
         KycDecider decider = new KycDecider(jwt.getSubject(), jwt.getClaimAsString("preferred_username"));
         return customerService.updateKyc(customerId, request.kycStatus(), request.reason(), decider);
+    }
+
+    @PostMapping("/{customerId}/suspend")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Suspend a customer",
+            description = "Money cannot leave their accounts and they cannot open new ones; payments in still "
+                    + "arrive. Needs a reason, which is kept with who suspended them.")
+    public CustomerResponse suspend(@PathVariable UUID customerId,
+                                    @Valid @RequestBody(required = false) CustomerStatusChangeRequest request) {
+        return customerService.changeStatus(customerId, CustomerStatus.SUSPENDED, reasonOf(request));
+    }
+
+    @PostMapping("/{customerId}/reinstate")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Lift a customer's suspension", description = "A reason is optional.")
+    public CustomerResponse reinstate(@PathVariable UUID customerId,
+                                      @Valid @RequestBody(required = false) CustomerStatusChangeRequest request) {
+        return customerService.changeStatus(customerId, CustomerStatus.ACTIVE, reasonOf(request));
+    }
+
+    @PostMapping("/{customerId}/close")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Close a customer",
+            description = "Refused while any of their accounts is open. Closing is final, and needs a reason.")
+    public CustomerResponse close(@PathVariable UUID customerId,
+                                  @Valid @RequestBody(required = false) CustomerStatusChangeRequest request) {
+        return customerService.changeStatus(customerId, CustomerStatus.CLOSED, reasonOf(request));
+    }
+
+    @GetMapping("/{customerId}/status-changes")
+    @PreAuthorize("hasAnyRole('TELLER', 'ADMIN')")
+    @Operation(summary = "Who suspended, reinstated or closed this customer, and why -- newest first",
+            description = "Staff only: the reason for a suspension can be a fraud report or a legal order.")
+    public PagedResponse<CustomerStatusChangeResponse> statusChanges(
+            @PathVariable UUID customerId,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return PagedResponse.of(customerService.statusHistory(customerId, PageRequest.of(page, size)));
+    }
+
+    private static String reasonOf(CustomerStatusChangeRequest request) {
+        return request == null ? null : request.reason();
     }
 
     @GetMapping("/{customerId}/kyc-decisions")

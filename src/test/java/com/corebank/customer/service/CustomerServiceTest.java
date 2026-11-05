@@ -59,7 +59,9 @@ class CustomerServiceTest {
         Clock clock = Clock.fixed(TODAY.atStartOfDay(ZoneOffset.UTC).toInstant(), ZoneOffset.UTC);
         customerService = new CustomerService(customers, sequences, clock, eventPublisher,
                 org.mockito.Mockito.mock(com.corebank.customer.repository.KycDecisionRepository.class),
-                org.mockito.Mockito.mock(com.corebank.customer.repository.IdentityLinkRepository.class));
+                org.mockito.Mockito.mock(com.corebank.customer.repository.IdentityLinkRepository.class),
+                org.mockito.Mockito.mock(com.corebank.customer.repository.CustomerStatusChangeRepository.class),
+                java.util.List.of());
     }
 
     private static CreateCustomerRequest bornOn(LocalDate dateOfBirth) {

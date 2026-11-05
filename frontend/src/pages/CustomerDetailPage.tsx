@@ -9,6 +9,8 @@ import {
 } from "../api/hooks";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { IdentityCard } from "../components/IdentityCard";
+import { CustomerStatusCard } from "../components/CustomerStatusCard";
+import { canReviewKyc } from "../customerStatus";
 import { KycCard } from "../components/KycCard";
 import { NotificationsCard } from "../components/Notifications";
 import { SpendingInsights } from "../components/SpendingInsights";
@@ -61,7 +63,9 @@ export function CustomerDetailPage() {
 
       </div>
 
-      <KycCard customerId={customer.id} current={customer.kycStatus} admin={admin} />
+      <CustomerStatusCard customerId={customer.id} status={customer.status} admin={admin} />
+
+      <KycCard customerId={customer.id} current={customer.kycStatus} admin={admin && canReviewKyc(customer.status)} />
 
       {!customer.identityLinked && <LinkIdentityCard customerId={customer.id} />}
 

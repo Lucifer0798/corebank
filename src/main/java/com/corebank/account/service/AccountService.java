@@ -66,7 +66,9 @@ public class AccountService {
                     "Only SAVINGS and CURRENT accounts can be opened through the API");
         }
 
-        Customer customer = customerService.require(request.customerId());
+        // Locked, so that closing this customer waits for this account or this for the closure, and
+        // two requests cannot both pass the per-customer limit below.
+        Customer customer = customerService.requireForUpdate(request.customerId());
         if (!customer.canOpenAccounts()) {
             throw new BusinessRuleException("CUSTOMER_NOT_ELIGIBLE",
                     "Customer " + customer.getCustomerNumber() + " must be ACTIVE and KYC-verified to hold an account");

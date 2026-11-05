@@ -25,7 +25,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 
 | Capability | Detail |
 | --- | --- |
-| Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot open an account, and money cannot leave the accounts of one whose KYC lapses later; payments in still arrive. |
+| Customer onboarding | Create customers, run a KYC decision. An unverified customer cannot open an account, and money cannot leave the accounts of one whose KYC lapses later; payments in still arrive. Suspend or close a customer, with who and why kept. |
 | Accounts | Savings and current accounts, opened at a zero balance. Current accounts may carry an overdraft. |
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
 | FX | Cross-currency transfers, posted as four legs through per-currency position accounts, with the book valued and marked to market. |
@@ -791,6 +791,48 @@ This does not repair accounts it already happened to. Before deploying, find the
 closed with interest still accrued and not yet paid can be found with `... and accrued_interest >=
 0.01`. Each needs a decision about how to pay the customer.
 
+### Suspending and closing a customer
+
+`customer.status` has allowed `SUSPENDED` and `CLOSED` since the first migration, and the
+application acted on them: no new accounts, no money leaving, no KYC decision on a closed customer.
+But the only code that ever wrote the column set it to `ACTIVE`, at creation, so none of those guards
+had fired on a real customer. A customer who left stayed active for good, with nothing to stop staff
+opening them a new account. The only way to stop one was to freeze each account in turn, which a new
+account escaped, or to record a KYC rejection nobody had made.
+
+**Suspending** (admin, with a reason) puts those guards to work. It follows the rule a lapsed KYC
+already has, and is read live from the customer, so reinstating lifts it at once with nothing on each
+account to undo:
+
+- Money cannot leave: withdrawals, the paying side of a transfer, placing a hold, setting up or
+  resuming a standing order. All refuse with `CUSTOMER_NOT_ACTIVE`, a separate code from
+  `CUSTOMER_NOT_VERIFIED`, because telling staff a suspended customer "is not KYC-verified" would
+  send them to the wrong card to lift it. No new accounts either.
+- **Payments in still arrive**: deposits, incoming transfers, interest.
+- **Reversals are exempt.** A correction the bank owes must never be refused.
+- **A hold placed earlier cannot be captured during a suspension.** A capture is a withdrawal, and
+  this is the policy a freeze and a lapsed KYC already have. The hold stays outstanding, to capture
+  after reinstatement or to release.
+- **An existing standing order fails** like any other refused debit. The reason it records is the
+  generic one, since the payee can see the instruction and a suspension is not theirs to learn of.
+
+**Closing** (admin, with a reason) is final, and can be done from active or suspended. It is refused
+with `CLOSURE_BLOCKED` while any account is open, naming every one, frozen accounts included, so
+staff clear them in one pass. The record stays, since the ledger and these histories point at it.
+After closing, status changes and KYC decisions are refused with `CUSTOMER_CLOSED`, and the customer
+page stops offering them.
+
+The check and the account's creation cannot race: closing a customer and opening an account both
+take the customer's row lock. Without that, opening could read the customer as still active, slip in
+after closure's check, and leave a closed customer holding an open account. It also closes the same
+race on the per-customer account limit. The account package reports what stands in the way through
+`CustomerClosureCheck`, since it depends on the customer package and not the other way round.
+
+**Every change is kept** in `customer_status_change`: from and to, who, why and when. It is
+append-only in the way the other histories are, and any staff member can read it, but not the customer:
+the reason can be a fraud report or a legal order. A change to the status the customer already has
+is refused with `STATUS_UNCHANGED` rather than recorded.
+
 ### Scheduled transfers
 
 A standing instruction is the only thing here that moves money with no request behind it, and
@@ -1252,6 +1294,10 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `GET` | `/api/v1/customers/me` | CUSTOMER | Resolve the caller's own customer record |
 | `PATCH` | `/api/v1/customers/{id}/kyc` | ADMIN | Record a KYC decision: `kycStatus`, and a `reason` for anything but VERIFIED |
 | `GET` | `/api/v1/customers/{id}/kyc-decisions` | TELLER, ADMIN | Every KYC decision, who made it and why, newest first |
+| `POST` | `/api/v1/customers/{id}/suspend` | ADMIN | Stop money leaving and new accounts; payments in still arrive. Needs a `reason` |
+| `POST` | `/api/v1/customers/{id}/reinstate` | ADMIN | Lift a suspension; `reason` optional |
+| `POST` | `/api/v1/customers/{id}/close` | ADMIN | Close a customer: no open accounts, and a `reason`. Final |
+| `GET` | `/api/v1/customers/{id}/status-changes` | TELLER, ADMIN | Every suspension, reinstatement and closure, who made it and why, newest first |
 | `GET` | `/api/v1/customers/me/notifications` | CUSTOMER | What the caller has been told, newest first |
 | `GET` | `/api/v1/customers/{id}/notifications` | TELLER, ADMIN | What a customer has been told, newest first |
 | `PATCH` | `/api/v1/customers/{id}/identity` | TELLER, ADMIN | Link a Keycloak identity to this customer; once only |
@@ -1342,8 +1388,10 @@ as REST, passed as `authorization` metadata.
 | `DAILY_LIMIT_EXCEEDED` | 422 | The account's daily debit allowance is spent; the message says how much remains |
 | `ACCOUNT_FROZEN` / `ACCOUNT_CLOSED` | 422 | The account cannot take postings |
 | `CUSTOMER_NOT_ELIGIBLE` | 422 | Not active, or KYC not verified |
-| `STATUS_REASON_REQUIRED` | 422 | A freeze or closure was requested without saying why |
-| `STATUS_UNCHANGED` | 422 | The account already has the status requested |
+| `STATUS_REASON_REQUIRED` | 422 | A freeze, suspension or closure was requested without saying why |
+| `STATUS_UNCHANGED` | 422 | The account or customer already has the status requested |
+| `CUSTOMER_NOT_ACTIVE` | 422 | Money cannot leave this account: its owner is suspended. Payments in still arrive |
+| `CUSTOMER_CLOSED` | 422 | A closed customer cannot be changed or re-reviewed |
 | `KYC_REASON_REQUIRED` | 422 | A KYC decision other than VERIFIED was made without saying why |
 | `CUSTOMER_NOT_VERIFIED` | 422 | Money cannot leave this account: its owner's KYC is no longer verified. Payments in still arrive |
 | `CURRENCY_MISMATCH` | 422 | The account is held in another currency |
@@ -1357,7 +1405,7 @@ as REST, passed as `authorization` metadata.
 | `SCHEDULE_NOT_ACTIVE` | 422 | That instruction has already stopped |
 | `OVERDRAFT_NOT_ALLOWED` | 422 | Savings accounts cannot carry an overdraft |
 | `BALANCE_NOT_ZERO` | 422 | An account must be emptied before it is closed |
-| `CLOSURE_BLOCKED` | 422 | Something is still attached to the account (a hold, a standing instruction, interest not yet paid out); the message lists all of it |
+| `CLOSURE_BLOCKED` | 422 | Something is still attached to the account (a hold, a standing instruction, interest not yet paid out) or the customer (an open account); the message lists all of it |
 | `NO_INTEREST_PAYABLE` | 422 | A pay-out was asked for, but less than a paisa of interest is accrued |
 | `INTERNAL_ACCOUNT` | 422 | General-ledger accounts are not addressable here |
 | `REVERSAL_NOT_REVERSIBLE` | 422 | A reversal cannot itself be reversed |
