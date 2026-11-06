@@ -22,6 +22,7 @@ import type {
   SearchResponse,
   StatementLine,
   CustomerStatusChange,
+  LedgerCheckReport,
   Transaction,
   TransactionSearchHit,
   TransactionType,
@@ -326,6 +327,19 @@ export function useReleaseHold() {
   return useMutation({
     mutationFn: (reference: string) => api.post<Hold>(`/holds/${reference}/release`),
     onSuccess: (hold) => invalidateAfterHold(queryClient, hold),
+  });
+}
+
+/**
+ * Whether the books add up. Admin only. Totals over whole tables, so never on page load: nothing
+ * fetches until the card's button calls refetch.
+ */
+export function useLedgerCheck() {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["ledgerCheck"],
+    queryFn: () => api.get<LedgerCheckReport>("/admin/ledger-check"),
+    enabled: false,
   });
 }
 

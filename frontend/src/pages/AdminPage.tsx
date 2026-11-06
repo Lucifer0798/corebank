@@ -4,6 +4,7 @@ import { useReplay, type ReplayKind } from "../api/hooks";
 import { isAdmin, rolesFromAccessToken } from "../auth/roles";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { FxBookCard } from "../components/FxBookCard";
+import { LedgerCheckCard } from "../components/LedgerCheckCard";
 import { formatDateTime } from "../format";
 import { preset, replayWindow } from "../replayWindow";
 
@@ -17,7 +18,7 @@ const DESCRIPTIONS: Record<ReplayKind, string> = {
     + "current name, email and status.",
 };
 
-/** Admin tools. Today: replaying events through the outbox, which used to need a hand-built API call. */
+/** Admin tools: the ledger check, the FX book, and replaying events through the outbox. */
 export function AdminPage() {
   const auth = useAuth();
   const admin = isAdmin(rolesFromAccessToken(auth.user?.access_token));
@@ -42,6 +43,7 @@ export function AdminPage() {
           </p>
         </div>
       </div>
+      <LedgerCheckCard />
       <FxBookCard />
       <ReplayCard kind="transactions" />
       <ReplayCard kind="customers" />

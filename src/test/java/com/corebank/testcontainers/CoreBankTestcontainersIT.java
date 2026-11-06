@@ -946,6 +946,40 @@ class CoreBankTestcontainersIT {
         assertThat(history.<List<String>>path("content.changedByName")).doesNotContainNull();
     }
 
+    @Test
+    @Order(16)
+    @DisplayName("the ledger check runs on real Postgres, finds this suite's books clean, and finds a drifted balance")
+    void theLedgerCheckWorksOnPostgres() {
+        // Last on purpose: by now this suite has posted real deposits, withdrawals, racing transfers
+        // and interest through the real database, and the books must still add up. LedgerCheckTest
+        // proves each rule on H2; what only this can show is that the SQL runs on PostgreSQL --
+        // direction against normal_balance, its uuid and numeric grouping -- and agrees with it.
+        var clean = given().header("Authorization", "Bearer " + adminToken)
+                .get("/admin/ledger-check")
+                .then().statusCode(200).extract();
+        assertThat(clean.<List<?>>path("checks")).hasSize(5);
+        assertThat(clean.<List<List<?>>>path("checks.discrepancies")).allSatisfy(found -> assertThat(found).isEmpty());
+        assertThat(clean.<Boolean>path("clean")).isTrue();
+
+        given().header("Authorization", "Bearer " + tellerToken)
+                .get("/admin/ledger-check")
+                .then().statusCode(403);
+
+        String accountId = fundedAccount(new BigDecimal("100.00"));
+        UUID id = UUID.fromString(accountId);
+        jdbc.update("update account set balance = balance + 5 where id = ?", id);
+        try {
+            given().header("Authorization", "Bearer " + adminToken)
+                    .get("/admin/ledger-check")
+                    .then().statusCode(200)
+                    .body("clean", equalTo(false))
+                    .body("checks[1].check", equalTo("BALANCE_MATCHES_LEDGER"))
+                    .body("checks[1].discrepancies.size()", equalTo(1));
+        } finally {
+            jdbc.update("update account set balance = balance - 5 where id = ?", id);
+        }
+    }
+
     private void assertOneOfThreeRefused(List<Integer> statuses, String accountId) {
         assertThat(statuses).as("two debits fit under the daily limit and the third does not")
                 .containsExactlyInAnyOrder(201, 201, 422);
