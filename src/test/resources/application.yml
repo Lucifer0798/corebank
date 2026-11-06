@@ -87,6 +87,9 @@ corebank:
     # Off, like the other runners: interest credited in the background would make every balance
     # assertion in this suite depend on when it ran. InterestServiceTest drives it directly.
     enabled: false
+  ledger-check:
+    # Off, like the other runners: tests here corrupt rows on purpose. LedgerCheckTest drives it.
+    enabled: false
 
 spring.grpc:
   server:

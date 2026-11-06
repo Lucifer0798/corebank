@@ -30,6 +30,7 @@ tier that categorises transactions off the same Kafka feed, with the model track
 | Money movement | Deposits, withdrawals and internal transfers, each posted as two balanced ledger legs. |
 | FX | Cross-currency transfers, posted as four legs through per-currency position accounts, with the book valued and marked to market. |
 | Interest | Savings balances accrue daily at full scale and capitalise monthly as a real posting, from the 1st until paid. |
+| Ledger check | A nightly and on-demand report that every running total still matches the ledger it summarises. |
 | Velocity limits | A per-account daily debit ceiling and a per-posting ceiling, counted from the ledger. |
 | Holds | Authorisation holds reserve money without posting it. Captured, released, or expired by a sweep. |
 | Scheduled transfers | Standing instructions -- once, daily, weekly or monthly -- posted by a background runner, set up and cancelled from the account page. |
@@ -963,6 +964,43 @@ retry after an insufficient-funds error still works.
 Reusing a key with a different body returns `409` rather than quietly doing something the
 caller did not ask for.
 
+### The ledger check
+
+`account.balance` and `account.held_amount` are running totals, kept up to date beside the ledger
+entries and holds they summarise. The only automatic check used to be `assertBalanced`, on one
+transaction as it posts. Nothing ever compared the totals with what they summarise, so a bug, a
+hand-written `UPDATE` or a bad migration would have shown the wrong number on every screen with
+no error anywhere. Closed accounts holding stranded interest went unreported for exactly this reason.
+
+`LedgerCheckService` holds the books to five rules:
+
+| Check | Rule |
+| --- | --- |
+| `LEDGER_BALANCED` | Debits equal credits across the whole ledger, in each currency |
+| `BALANCE_MATCHES_LEDGER` | Every account's balance equals the sum of its ledger entries |
+| `HELD_MATCHES_HOLDS` | Every account's held amount equals its active holds |
+| `CLOSED_ACCOUNTS_EMPTY` | A closed account holds no money, no holds and no payable interest |
+| `CLOSED_CUSTOMERS_HAVE_NO_OPEN_ACCOUNTS` | A closed customer holds no open account |
+
+It **reports and repairs nothing**: deciding which of two disagreeing figures is the true one is a
+person's job. Each check lists up to 50 problems with the figures that disagree, and says if there
+are more.
+
+It runs every night (`COREBANK_LEDGER_CHECK_CRON`, 02:30 UTC by default), logging each problem at
+`ERROR` and publishing `corebank_ledger_discrepancies` by check, which sits at zero from startup so
+an alert can see the first problem. The **CoreBank Overview** dashboard has a panel for it. An
+admin can run the same check at any moment from the Admin page, or with
+`GET /api/v1/admin/ledger-check`. It only runs when asked, since these are totals over whole tables.
+
+**Each check is one SQL statement, and that is what stops it crying wolf under load.** A posting
+updates the balance and writes its entries in one transaction, and a single statement reads one
+snapshot, so it sees both or neither. No locks are taken and none are needed. It is plain SQL rather
+than the entities on purpose, so that it reads what is really in the tables.
+
+The first run on an existing database may find something, such as accounts closed before closure
+checked for unpaid interest. That is the check working, and it replaces the hand-run queries in
+[Closing an account](#closing-an-account).
+
 ### Concurrency
 
 Money movement loads its accounts with `SELECT … FOR UPDATE`, so two postings against the
@@ -1334,6 +1372,7 @@ when that secret is absent, so this workflow stays green on a fork with no Sonar
 | `POST` | `/api/v1/fx/revalue` | ADMIN | Mark the book to market, posting the change since the last close |
 | `GET` | `/api/v1/search/transactions` | TELLER, ADMIN | Bank-wide search: `q`, `type`, `minAmount`/`maxAmount`, `from`/`to`; each hit carries its `status` |
 | `GET` | `/api/v1/search/customers` | TELLER, ADMIN | Search by name, email or customer number: `q` |
+| `GET` | `/api/v1/admin/ledger-check` | ADMIN | Check that the books add up, now: what disagrees, and where. Read-only |
 | `POST` | `/api/v1/admin/outbox/replay/transactions` | ADMIN | Re-enqueue transaction-posted events for `since`/`until` |
 | `POST` | `/api/v1/admin/outbox/replay/customers` | ADMIN | Re-enqueue customer-changed events for `since`/`until` |
 
@@ -1473,6 +1512,8 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_SAVINGS_ANNUAL_RATE` | `0.0350` | Annual rate on savings balances, as a fraction |
 | `COREBANK_DAY_COUNT_BASIS` | `365` | Denominator the daily rate is derived from; a policy choice, not a fact |
 | `COREBANK_INTEREST_ENABLED` | `true` | Set `false` to keep the accrual runner out of a replica |
+| `COREBANK_LEDGER_CHECK_CRON` | `0 30 2 * * *` | When the nightly ledger check runs, in UTC |
+| `COREBANK_LEDGER_CHECK_ENABLED` | `true` | Set `false` to keep the nightly ledger check out of a replica |
 | `COREBANK_DAILY_DEBIT_LIMIT` | `200000.00` | Per account, per UTC calendar day, across withdrawals and outgoing transfers |
 | `COREBANK_SINGLE_TRANSACTION_LIMIT` | `100000.00` | One posting's ceiling |
 | `COREBANK_HOLD_SWEEP_ENABLED` | `true` | Set `false` to keep the hold-expiry sweep out of a replica. Housekeeping only — a capture past the expiry instant is refused whether or not the sweep has run |

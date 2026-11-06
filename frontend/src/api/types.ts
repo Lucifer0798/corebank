@@ -164,6 +164,20 @@ export interface Transaction {
 }
 
 /** Mirrors com.corebank.fx.dto.FxPositionReport. */
+export interface LedgerCheckReport {
+  checkedAt: string;
+  /** True when every check found nothing. */
+  clean: boolean;
+  checks: {
+    check: string;
+    /** What this check holds the books to, in words. */
+    rule: string;
+    discrepancies: { subject: string; detail: string }[];
+    /** True when there are more than are listed. */
+    more: boolean;
+  }[];
+}
+
 export interface FxPositionReport {
   reportingCurrency: string;
   positions: {

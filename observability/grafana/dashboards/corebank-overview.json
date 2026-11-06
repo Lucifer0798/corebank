@@ -91,6 +91,31 @@
           "legendFormat": "idle"
         }
       ]
+    },
+    {
+      "id": 7,
+      "title": "Ledger check: problems found",
+      "description": "From the last ledger check, by check. Anything above zero means the books do not add up: run the check on the Admin page for the accounts involved.",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "corebank_ledger_discrepancies{job=\"corebank\"}",
+          "legendFormat": "{{check}}"
+        }
+      ]
     }
   ]
 }

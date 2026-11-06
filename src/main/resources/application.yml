@@ -198,6 +198,11 @@ corebank:
     # batches. A once-a-day schedule would make a restart at the wrong moment cost a day.
     accrual-interval: 1h
     enabled: ${COREBANK_INTEREST_ENABLED:true}
+  ledger-check:
+    # Whether the books still add up. Nightly, because these are totals over whole tables; an admin
+    # can run the same check at any moment from the Admin page. In UTC.
+    cron: ${COREBANK_LEDGER_CHECK_CRON:0 30 2 * * *}
+    enabled: ${COREBANK_LEDGER_CHECK_ENABLED:true}
 
 logging:
   level:
