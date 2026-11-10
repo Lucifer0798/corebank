@@ -1,7 +1,10 @@
 package com.corebank.account.service;
 
+import com.corebank.common.metrics.BackgroundFailures;
 import com.corebank.common.security.Actor;
 import com.corebank.common.security.Actors;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -36,10 +39,17 @@ public class InterestRunner {
 
     private static final Logger log = LoggerFactory.getLogger(InterestRunner.class);
 
-    private final InterestService interestService;
+    static final String ACCRUAL = "interest-accrual";
+    static final String CAPITALISATION = "interest-capitalisation";
 
-    public InterestRunner(InterestService interestService) {
+    private final InterestService interestService;
+    private final Counter accrualFailures;
+    private final Counter capitalisationFailures;
+
+    public InterestRunner(InterestService interestService, MeterRegistry meterRegistry) {
         this.interestService = interestService;
+        this.accrualFailures = BackgroundFailures.counter(meterRegistry, ACCRUAL);
+        this.capitalisationFailures = BackgroundFailures.counter(meterRegistry, CAPITALISATION);
     }
 
     @Scheduled(fixedDelayString = "${corebank.interest.accrual-interval:1h}")
@@ -68,6 +78,7 @@ public class InterestRunner {
                     interestService.accrue(id, today);
                 } catch (RuntimeException ex) {
                     // One account's failure must not cost every other account its day's interest.
+                    accrualFailures.increment();
                     log.warn("Could not accrue interest on account {}: {}", id, ex.toString());
                 }
             }
@@ -83,6 +94,7 @@ public class InterestRunner {
                 try {
                     interestService.capitalise(id, today);
                 } catch (RuntimeException ex) {
+                    capitalisationFailures.increment();
                     log.warn("Could not capitalise interest on account {}: {}", id, ex.toString());
                 }
             }

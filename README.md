@@ -1304,11 +1304,67 @@ The **CoreBank Overview** Grafana dashboard is provisioned automatically; no man
 and `/actuator/info` — Prometheus has no Keycloak token to present, and none of the three expose
 customer or account data.
 
+#### Alerts
+
+Prometheus evaluates four rules from [`observability/alerts.yml`](observability/alerts.yml) and
+shows them on its Alerts page, <http://localhost:9090/alerts>. **Nothing sends them anywhere
+yet.** Email, Slack or paging is still to be chosen, and means adding an Alertmanager beside
+Prometheus.
+
+| Alert | Severity | Fires when | What to do |
+|---|---|---|---|
+| `CoreBankDown` | critical | Prometheus has not reached the app for a minute | Check the app is running and reachable |
+| `CoreBankLedgerDoesNotAddUp` | critical | The last [ledger check](#the-ledger-check) found anything | Admin → Ledger check lists the accounts. Decide which figure is right; the check repairs nothing |
+| `CoreBankOutboxStuck` | warning | The oldest event not yet sent to Kafka has waited over five minutes | Check Kafka. The log says why with `Could not relay outbox event`. Nothing is lost; events go once Kafka is back |
+| `CoreBankBackgroundTaskFailing` | warning | A background task failed in the last two hours, labelled by `task` | Find the task's line in the log, below |
+
+| `task` | Log line to look for |
+|---|---|
+| `interest-accrual` | `Could not accrue interest on account` |
+| `interest-capitalisation` | `Could not capitalise interest on account` |
+| `hold-expiry` | `Could not expire hold` |
+| `standing-orders` | `Scheduled transfer ... could not be processed`. A standing order refused for want of funds is not a failure here: the customer is told, and it shows as `corebank.scheduled.transfers{outcome="failed"}` |
+| `ledger-check` | `Ledger check could not run`. Until it runs again, the ledger alert shows the last check's verdict |
+
+The metrics behind them:
+
+- `corebank.background.failures`, by `task`. Each runner already caught a failure so one bad row
+  could not stop its batch, but that left the failure as a log line and nothing else.
+- `corebank.outbox.oldest.waiting.age` (seconds) and `corebank.outbox.waiting` (events), measured
+  every 30 seconds (`corebank.outbox.backlog-check-interval`) rather than on every scrape. Age is
+  what the alert watches: a busy outbox holds many events, but a healthy one never holds an old
+  one.
+- `corebank.ledger.discrepancies`, by `check`, from [the ledger check](#the-ledger-check).
+
+Every one of these is registered at zero when the application starts. A counter created on its
+first increment is born at 1, and `increase()` needs a sample from before the change, so the
+first failure would never fire the alert.
+
+Two limits to know:
+
+- **A restart clears the ledger alert** until the next check, because the gauge starts at zero.
+  The nightly run puts it back, or run the check from the Admin page after a restart.
+- **The background alert clears two hours after the last failure**, whether or not anyone
+  looked. Two hours rather than one so that interest, which runs about hourly, keeps it firing
+  for as long as it keeps failing.
+
+The rules are tested. [`observability/alerts.test.yml`](observability/alerts.test.yml) proves
+each one fires when it should and stays quiet when it should not, using `promtool` from the same
+Prometheus image compose runs:
+
+```bash
+docker run --rm -v "$PWD/observability:/etc/prometheus:ro" -w /etc/prometheus --entrypoint promtool prom/prometheus:v3.14.0 test rules alerts.test.yml
+```
+
+`promtool` takes a metric's name on trust, and Micrometer adds units and suffixes on the way out,
+so `AlertRulesTest` checks every metric a rule names is one the application really exports.
+
 ### CI and security scanning
 
 Every push and pull request against `main` runs three GitHub Actions workflows: backend build
 and test (with JaCoCo coverage), frontend build and typecheck, and a Docker image build scanned
-with Trivy. A separate CodeQL workflow analyses both the Java backend and the TypeScript
+with Trivy. An **Alert rules** job loads Prometheus's config and runs the
+[alert rule tests](#alerts) with `promtool`. A separate CodeQL workflow analyses both the Java backend and the TypeScript
 frontend, plus a weekly scheduled run so newly published advisories get caught against code that
 hasn't changed. The Trivy scan reports CRITICAL/HIGH findings without failing the build — most
 of what it finds at that severity lives in base-image OS packages outside this project's direct

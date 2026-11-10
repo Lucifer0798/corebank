@@ -109,6 +109,22 @@ jobs:
       - name: Test
         run: python -m pytest tests/ -q
 
+  alerts:
+    # The same Prometheus image compose runs, so the rules are checked by the version that loads them.
+    name: Alert rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Rules load, and each alert fires when it should
+        env:
+          PROMTOOL: >-
+            docker run --rm -v ${{ github.workspace }}/observability:/etc/prometheus:ro
+            -w /etc/prometheus --entrypoint promtool prom/prometheus:v3.14.0
+        run: |
+          $PROMTOOL check config prometheus.yml
+          $PROMTOOL test rules alerts.test.yml
+
   docker:
     name: Docker image build and scan
     runs-on: ubuntu-latest

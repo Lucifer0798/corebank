@@ -26,4 +26,9 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     List<OutboxEvent> lockNextBatch(Pageable pageable);
 
     long countByPublishedAtIsNull();
+
+    /** One statement, so the count and the oldest agree. {@code oldest} is null when none wait. */
+    @Query("SELECT new com.corebank.outbox.repository.OutboxBacklog(COUNT(e), MIN(e.createdAt)) "
+            + "FROM OutboxEvent e WHERE e.publishedAt IS NULL")
+    OutboxBacklog backlog();
 }

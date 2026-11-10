@@ -199,7 +199,7 @@ class PostingAttributionTest {
         });
         Actors.setTestFallback(null);
 
-        new InterestRunner(interest).run();
+        new InterestRunner(interest, new SimpleMeterRegistry()).run();
 
         assertThat(seen.get()).isEqualTo(Actor.system("interest-runner"));
     }

@@ -333,7 +333,7 @@ class LedgerCheckTest {
         corrupt("update account set balance = balance + 5 where id = ?",
                 "update account set balance = balance - 5 where id = ?", account);
 
-        new LedgerCheckRunner(ledgerCheck).run();
+        new LedgerCheckRunner(ledgerCheck, new SimpleMeterRegistry()).run();
 
         assertThat(output.getOut()).contains("ERROR").contains("BALANCE_MATCHES_LEDGER").contains(accountNumber);
     }
@@ -341,7 +341,7 @@ class LedgerCheckTest {
     @Test
     @DisplayName("the nightly run says nothing is wrong when nothing is, and not as an error")
     void theNightlyRunIsQuietWhenClean(CapturedOutput output) {
-        new LedgerCheckRunner(ledgerCheck).run();
+        new LedgerCheckRunner(ledgerCheck, new SimpleMeterRegistry()).run();
 
         assertThat(output.getOut()).contains("Ledger check found nothing wrong");
         assertThat(output.getOut().lines())
