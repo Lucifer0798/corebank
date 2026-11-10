@@ -63,6 +63,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
  * The counterpart to {@code CoreBankApiIntegrationTest}: that suite injects a fake JWT and
@@ -850,7 +851,7 @@ class CoreBankTestcontainersIT {
                     com.corebank.account.domain.AccountType.SAVINGS, "INR", BigDecimal.ZERO)).id());
         }
 
-        new InterestRunner(interestService).run();
+        new InterestRunner(interestService, new SimpleMeterRegistry()).run();
 
         java.time.LocalDate today = interestService.today();
         assertThat(accountRepository.findAllById(ids))

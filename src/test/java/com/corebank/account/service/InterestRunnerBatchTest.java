@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
  * Every account in one tick, however many there are.
@@ -92,7 +93,7 @@ class InterestRunnerBatchTest {
             List<UUID> ids = savingsAccounts(MORE_THAN_A_BATCH, null);
             LocalDate today = interestService.today();
 
-            new InterestRunner(interestService).accrueAll(today);
+            new InterestRunner(interestService, new SimpleMeterRegistry()).accrueAll(today);
 
             assertThat(accounts.findAllById(ids)).extracting(Account::getInterestAccruedThrough)
                     .hasSize(MORE_THAN_A_BATCH)
@@ -113,7 +114,7 @@ class InterestRunnerBatchTest {
             UUID failing = ids.removeFirst();
             jdbc.update("update account set currency = 'XYZ' where id = ?", failing);
 
-            InterestRunner runner = new InterestRunner(interestService);
+            InterestRunner runner = new InterestRunner(interestService, new SimpleMeterRegistry());
             assertTimeoutPreemptively(Duration.ofSeconds(120),
                     () -> Actors.runAs(InterestRunner.ACTOR, () -> runner.capitaliseAll(nextFirst())));
 
@@ -139,7 +140,7 @@ class InterestRunnerBatchTest {
             LocalDate second = LocalDate.of(2026, 11, 2);
             when(interest.today()).thenReturn(second);
 
-            new InterestRunner(interest).run();
+            new InterestRunner(interest, new SimpleMeterRegistry()).run();
 
             org.mockito.Mockito.verify(interest).findAccountsToCapitalise(second, InterestService.FIRST);
         }
@@ -191,7 +192,7 @@ class InterestRunnerBatchTest {
                 return true;
             });
 
-            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> new InterestRunner(interest).accrueAll(today));
+            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> new InterestRunner(interest, new SimpleMeterRegistry()).accrueAll(today));
 
             assertThat(done).containsExactlyInAnyOrderElementsOf(healthy);
         }
@@ -206,7 +207,7 @@ class InterestRunnerBatchTest {
                 return Optional.of("TXN-INTEREST");
             });
 
-            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> new InterestRunner(interest).capitaliseAll(today));
+            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> new InterestRunner(interest, new SimpleMeterRegistry()).capitaliseAll(today));
 
             assertThat(done).containsExactlyInAnyOrderElementsOf(healthy);
         }

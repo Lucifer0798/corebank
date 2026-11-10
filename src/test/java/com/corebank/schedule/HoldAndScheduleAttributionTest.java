@@ -141,7 +141,7 @@ class HoldAndScheduleAttributionTest {
                 velocityLimits, new SimpleMeterRegistry(),
                 Clock.fixed(Instant.now().plus(Duration.ofDays(2)), ZoneOffset.UTC));
 
-        new TransactionTemplate(transactionManager).executeWithoutResult(status -> new HoldExpiryRunner(later).sweep());
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> new HoldExpiryRunner(later, new SimpleMeterRegistry()).sweep());
 
         assertThat(holdService.get(reference).settledBy()).isEqualTo(Actor.system("hold-expiry"));
     }

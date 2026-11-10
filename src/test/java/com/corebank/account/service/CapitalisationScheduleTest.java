@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
  * When interest is paid out. It used to be the 1st and only the 1st: a 1st with no tick at all --
@@ -65,7 +66,7 @@ class CapitalisationScheduleTest {
     }
 
     private void runOn(String day) {
-        new InterestRunner(interestService).capitaliseAll(LocalDate.parse(day));
+        new InterestRunner(interestService, new SimpleMeterRegistry()).capitaliseAll(LocalDate.parse(day));
     }
 
     private Account reload(UUID id) {

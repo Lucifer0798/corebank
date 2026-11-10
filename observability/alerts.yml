@@ -1,0 +1,61 @@
+# What should get someone's attention, evaluated by Prometheus (prometheus.yml loads this file).
+#
+# Nothing sends these anywhere yet. They show on Prometheus's Alerts page
+# (http://localhost:9090/alerts). Email, Slack or paging is a choice still to be made, and is an
+# Alertmanager added beside Prometheus once it is.
+#
+# alerts.test.yml proves each one fires when it should and stays quiet when it should not. Run it
+# with promtool (see the README's Observability section). AlertRulesTest checks every metric named
+# here is one the application really exports, since a misspelt name is an alert that never fires.
+groups:
+  - name: corebank
+    rules:
+      - alert: CoreBankDown
+        expr: up{job="corebank"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: CoreBank is not answering
+          description: >-
+            Prometheus has not been able to scrape {{ $labels.instance }} for a minute. The
+            application is down, or Prometheus cannot reach it.
+
+      - alert: CoreBankLedgerDoesNotAddUp
+        # No "for": every reading is a whole check's verdict, not a sample that could be noise.
+        expr: max by (check) (corebank_ledger_discrepancies{job="corebank"}) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "The ledger check failed: {{ $labels.check }}"
+          description: >-
+            The last ledger check found {{ $value }} problem(s) under {{ $labels.check }}. Admin,
+            then Ledger check, lists the accounts. The check repairs nothing. This clears when a
+            check finds the books clean again.
+
+      - alert: CoreBankOutboxStuck
+        # Age, not count: a busy outbox holds many events, but a healthy one never holds an old one.
+        expr: max(corebank_outbox_oldest_waiting_age_seconds{job="corebank"}) > 300
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Events have not reached Kafka for over five minutes
+          description: >-
+            The oldest event waiting to be sent to Kafka is {{ $value | humanizeDuration }} old.
+            Notifications, search and spending insights are falling behind until it is sent.
+            Nothing is lost: every event is sent once Kafka can be reached. The application log
+            says why with "Could not relay outbox event".
+
+      - alert: CoreBankBackgroundTaskFailing
+        # Two hours. Interest runs about hourly, so with a one-hour window an account failing every
+        # run would let this clear for a moment between runs and then fire again.
+        expr: sum by (task) (increase(corebank_background_failures_total{job="corebank"}[2h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.task }} task is failing"
+          description: >-
+            The {{ $labels.task }} task has failed at least once in the last two hours. The rest of
+            its work carried on. The application log names what failed and why; the README's
+            Observability section says which line to look for.

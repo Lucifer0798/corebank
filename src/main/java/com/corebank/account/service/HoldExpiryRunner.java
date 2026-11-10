@@ -1,7 +1,10 @@
 package com.corebank.account.service;
 
+import com.corebank.common.metrics.BackgroundFailures;
 import com.corebank.common.security.Actors;
 import com.corebank.common.security.Actor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,10 +31,14 @@ public class HoldExpiryRunner {
 
     private static final Logger log = LoggerFactory.getLogger(HoldExpiryRunner.class);
 
-    private final HoldService holdService;
+    static final String TASK = "hold-expiry";
 
-    public HoldExpiryRunner(HoldService holdService) {
+    private final HoldService holdService;
+    private final Counter failures;
+
+    public HoldExpiryRunner(HoldService holdService, MeterRegistry meterRegistry) {
         this.holdService = holdService;
+        this.failures = BackgroundFailures.counter(meterRegistry, TASK);
     }
 
     @Scheduled(fixedDelayString = "${corebank.holds.sweep-interval:5m}")
@@ -48,6 +55,7 @@ public class HoldExpiryRunner {
                 holdService.expire(id);
             } catch (RuntimeException ex) {
                 // One stuck hold must not stop the others being freed; the next tick tries again.
+                failures.increment();
                 log.warn("Could not expire hold {}: {}", id, ex.toString());
             }
         }

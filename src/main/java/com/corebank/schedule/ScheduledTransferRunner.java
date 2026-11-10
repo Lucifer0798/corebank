@@ -1,9 +1,11 @@
 package com.corebank.schedule;
 
+import com.corebank.common.metrics.BackgroundFailures;
 import com.corebank.common.security.Actor;
 import com.corebank.common.security.Actors;
 import com.corebank.schedule.service.ScheduledTransferService;
 import com.corebank.schedule.service.ScheduledTransferService.DueOccurrence;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -38,14 +40,24 @@ public class ScheduledTransferRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ScheduledTransferRunner.class);
 
+    static final String TASK = "standing-orders";
+
     private final ScheduledTransferService service;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
+    private final Counter failures;
 
     public ScheduledTransferRunner(ScheduledTransferService service, MeterRegistry meterRegistry, Clock clock) {
         this.service = service;
         this.meterRegistry = meterRegistry;
         this.clock = clock;
+        // Every outcome from zero, so the first of each is a change an alert can see.
+        for (String outcome : new String[] {"posted", "failed", "error"}) {
+            meterRegistry.counter("corebank.scheduled.transfers", "outcome", outcome);
+        }
+        // Only the runner's own faults. A transfer refused for want of funds is the customer's
+        // business, and they are already told about it.
+        this.failures = BackgroundFailures.counter(meterRegistry, TASK);
     }
 
     @Scheduled(fixedDelayString = "${corebank.scheduled-transfers.poll-interval:60s}")
@@ -67,6 +79,7 @@ public class ScheduledTransferRunner {
                 // tick; what must not happen is one mandate's problem stopping every mandate
                 // behind it in the batch, every tick, which is what letting this escape did.
                 count("error");
+                failures.increment();
                 log.error("Scheduled transfer {} could not be processed; leaving it for the next tick", id, ex);
             }
         }

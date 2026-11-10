@@ -1,5 +1,8 @@
 package com.corebank.ledger;
 
+import com.corebank.common.metrics.BackgroundFailures;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -23,15 +26,28 @@ public class LedgerCheckRunner {
 
     private static final Logger log = LoggerFactory.getLogger(LedgerCheckRunner.class);
 
-    private final LedgerCheckService service;
+    static final String TASK = "ledger-check";
 
-    public LedgerCheckRunner(LedgerCheckService service) {
+    private final LedgerCheckService service;
+    private final Counter failures;
+
+    public LedgerCheckRunner(LedgerCheckService service, MeterRegistry meterRegistry) {
         this.service = service;
+        this.failures = BackgroundFailures.counter(meterRegistry, TASK);
     }
 
     @Scheduled(cron = "${corebank.ledger-check.cron:0 30 2 * * *}", zone = "UTC")
     public void run() {
-        LedgerCheckReport report = service.check();
+        LedgerCheckReport report;
+        try {
+            report = service.check();
+        } catch (RuntimeException ex) {
+            // A check that cannot run leaves the metric at its last reading, which may well be zero:
+            // without this, the books going unchecked would look exactly like the books being fine.
+            failures.increment();
+            log.error("Ledger check could not run", ex);
+            return;
+        }
         if (report.clean()) {
             log.info("Ledger check found nothing wrong");
             return;

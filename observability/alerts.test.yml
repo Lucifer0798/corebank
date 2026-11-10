@@ -1,0 +1,161 @@
+# promtool test rules alerts.test.yml -- each alert firing when it should, and not when it should not.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: CoreBankDown fires after a minute of failed scrapes
+    interval: 1m
+    input_series:
+      - series: 'up{job="corebank", instance="app:8080"}'
+        values: '1 1 0 0 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CoreBankDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CoreBankDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: corebank
+              instance: app:8080
+            exp_annotations:
+              summary: CoreBank is not answering
+              description: >-
+                Prometheus has not been able to scrape app:8080 for a minute. The application is
+                down, or Prometheus cannot reach it.
+
+  - name: CoreBankDown ignores one missed scrape
+    interval: 1m
+    input_series:
+      - series: 'up{job="corebank", instance="app:8080"}'
+        values: '1 0 1 1 1'
+    alert_rule_test:
+      # While the scrape is missed, and after: never firing.
+      - eval_time: 1m
+        alertname: CoreBankDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: CoreBankDown
+        exp_alerts: []
+
+  - name: CoreBankLedgerDoesNotAddUp fires at once, names the check, and clears when it is clean
+    interval: 1m
+    input_series:
+      - series: 'corebank_ledger_discrepancies{job="corebank", instance="app:8080", check="BALANCE_MATCHES_LEDGER"}'
+        values: '0 2 2 0'
+      - series: 'corebank_ledger_discrepancies{job="corebank", instance="app:8080", check="HELD_MATCHES_HOLDS"}'
+        values: '0 0 0 0'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: CoreBankLedgerDoesNotAddUp
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: CoreBankLedgerDoesNotAddUp
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              check: BALANCE_MATCHES_LEDGER
+            exp_annotations:
+              summary: "The ledger check failed: BALANCE_MATCHES_LEDGER"
+              description: >-
+                The last ledger check found 2 problem(s) under BALANCE_MATCHES_LEDGER. Admin, then
+                Ledger check, lists the accounts. The check repairs nothing. This clears when a
+                check finds the books clean again.
+      - eval_time: 3m
+        alertname: CoreBankLedgerDoesNotAddUp
+        exp_alerts: []
+
+  - name: CoreBankOutboxStuck fires once the oldest event has waited over five minutes
+    interval: 1m
+    input_series:
+      # Kafka goes away at 0m and nothing is sent; the monitor reports the oldest event's age.
+      - series: 'corebank_outbox_oldest_waiting_age_seconds{job="corebank", instance="app:8080"}'
+        values: '0 60 120 180 240 300 360 420 480'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CoreBankOutboxStuck
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CoreBankOutboxStuck
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: CoreBankOutboxStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Events have not reached Kafka for over five minutes
+              description: >-
+                The oldest event waiting to be sent to Kafka is 7m 0s old. Notifications, search
+                and spending insights are falling behind until it is sent. Nothing is lost: every
+                event is sent once Kafka can be reached. The application log says why with "Could
+                not relay outbox event".
+
+  - name: CoreBankOutboxStuck stays quiet for a busy outbox that keeps up
+    interval: 1m
+    input_series:
+      - series: 'corebank_outbox_oldest_waiting_age_seconds{job="corebank", instance="app:8080"}'
+        values: '2 1 3 0 2 1 2 3 1 0 2'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CoreBankOutboxStuck
+        exp_alerts: []
+
+  - name: CoreBankBackgroundTaskFailing sees the first failure of a counter that starts at zero
+    interval: 1m
+    input_series:
+      - series: 'corebank_background_failures_total{job="corebank", instance="app:8080", task="interest-accrual"}'
+        values: '0 0 1 1 1'
+      - series: 'corebank_background_failures_total{job="corebank", instance="app:8080", task="hold-expiry"}'
+        values: '0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CoreBankBackgroundTaskFailing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CoreBankBackgroundTaskFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              task: interest-accrual
+            exp_annotations:
+              summary: "The interest-accrual task is failing"
+              description: >-
+                The interest-accrual task has failed at least once in the last two hours. The rest of
+                its work carried on. The application log names what failed and why; the README's
+                Observability section says which line to look for.
+
+  - name: CoreBankBackgroundTaskFailing cannot see a counter born at 1, which is why they start at zero
+    interval: 1m
+    input_series:
+      - series: 'corebank_background_failures_total{job="corebank", instance="app:8080", task="hold-expiry"}'
+        values: '_ _ 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CoreBankBackgroundTaskFailing
+        exp_alerts: []
+
+  - name: CoreBankBackgroundTaskFailing keeps firing for two hours after the last failure, then clears
+    interval: 1m
+    input_series:
+      - series: 'corebank_background_failures_total{job="corebank", instance="app:8080", task="hold-expiry"}'
+        values: '0 1x130'
+    alert_rule_test:
+      - eval_time: 110m
+        alertname: CoreBankBackgroundTaskFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              task: hold-expiry
+            exp_annotations:
+              summary: "The hold-expiry task is failing"
+              description: >-
+                The hold-expiry task has failed at least once in the last two hours. The rest of its
+                work carried on. The application log names what failed and why; the README's
+                Observability section says which line to look for.
+      - eval_time: 125m
+        alertname: CoreBankBackgroundTaskFailing
+        exp_alerts: []
