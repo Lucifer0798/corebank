@@ -162,8 +162,8 @@ corebank:
     # expression, not a bound record field.
     relay-interval: 2s
   scheduled-transfers:
-    # How many due mandates one tick claims. A larger backlog is worked through over several
-    # ticks rather than in a single sweep.
+    # How many due mandates one query fetches. A tick works through every due mandate, a batch at
+    # a time.
     batch-size: 50
     # Consecutive refusals before a mandate is suspended and left for a human -- see
     # CoreBankProperties.ScheduledTransfers.

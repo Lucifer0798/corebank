@@ -100,7 +100,7 @@ class BackgroundFailuresTest {
         HoldService holds = mock(HoldService.class);
         UUID stuck = UUID.randomUUID();
         UUID fine = UUID.randomUUID();
-        when(holds.findExpired()).thenReturn(List.of(stuck, fine));
+        when(holds.findExpired(HoldService.FIRST)).thenReturn(List.of(stuck, fine));
         doThrow(new IllegalStateException("row locked")).when(holds).expire(stuck);
 
         new HoldExpiryRunner(holds, meters).sweep();
@@ -117,7 +117,7 @@ class BackgroundFailuresTest {
         UUID shortOfFunds = UUID.randomUUID();
         DueOccurrence due = new DueOccurrence(shortOfFunds, TODAY, "sched:" + shortOfFunds + ":" + TODAY,
                 new TransferRequest(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00"), "INR", "Rent"));
-        when(service.findDue(TODAY)).thenReturn(List.of(broken, shortOfFunds));
+        when(service.findDue(TODAY, ScheduledTransferService.FIRST)).thenReturn(List.of(broken, shortOfFunds));
         when(service.claim(broken, TODAY)).thenThrow(new IllegalStateException("row in a bad state"));
         when(service.claim(shortOfFunds, TODAY)).thenReturn(Optional.of(due));
         when(service.execute(eq(due))).thenThrow(new IllegalStateException("insufficient funds"));

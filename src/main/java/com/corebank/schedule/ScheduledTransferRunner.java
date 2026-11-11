@@ -9,6 +9,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -20,6 +21,12 @@ import org.springframework.stereotype.Component;
 /**
  * Turns due mandates into postings. The only thing in the application that moves money without a
  * request behind it.
+ *
+ * <p>Each tick works through <em>every</em> due mandate, a batch at a time. It used to take the
+ * first 50 and stop, which capped standing orders at 50 a minute, about 72,000 a day, so on a busy
+ * 1st anything past that paid late. And since the first page was always the same, 50 mandates that
+ * failed every time would have stopped the runner for good. Each batch starts after the last id of
+ * the one before, which moves the run past them.
  *
  * <p>One occurrence is advanced per mandate per tick, deliberately. After an outage a daily
  * standing order may be several occurrences behind; it catches up over successive ticks rather
@@ -70,18 +77,24 @@ public class ScheduledTransferRunner {
 
     private void runDue() {
         LocalDate today = LocalDate.now(clock);
-        for (UUID id : service.findDue(today)) {
-            try {
-                runOne(id, today);
-            } catch (RuntimeException ex) {
-                // Something other than the transfer itself went wrong -- claiming the row, or
-                // recording the outcome. The mandate is left as it was and is tried again next
-                // tick; what must not happen is one mandate's problem stopping every mandate
-                // behind it in the batch, every tick, which is what letting this escape did.
-                count("error");
-                failures.increment();
-                log.error("Scheduled transfer {} could not be processed; leaving it for the next tick", id, ex);
+        UUID after = ScheduledTransferService.FIRST;
+        for (List<UUID> batch = service.findDue(today, after); !batch.isEmpty(); batch = service.findDue(today, after)) {
+            for (UUID id : batch) {
+                try {
+                    runOne(id, today);
+                } catch (RuntimeException ex) {
+                    // Something other than the transfer itself went wrong -- claiming the row, or
+                    // recording the outcome. The mandate is left as it was and is tried again next
+                    // tick; what must not happen is one mandate's problem stopping every mandate
+                    // behind it in the batch, every tick, which is what letting this escape did.
+                    count("error");
+                    failures.increment();
+                    log.error("Scheduled transfer {} could not be processed; leaving it for the next tick", id, ex);
+                }
             }
+            // After this batch's last id, whatever happened to it: a mandate that just posted may
+            // still be due, and this is what keeps it to one occurrence this tick.
+            after = batch.getLast();
         }
     }
 

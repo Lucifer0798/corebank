@@ -54,7 +54,7 @@ class ScheduledTransferRunnerIsolationTest {
     void oneBrokenMandateDoesNotBlockTheBatch() {
         UUID broken = UUID.randomUUID();
         UUID healthy = UUID.randomUUID();
-        when(service.findDue(TODAY)).thenReturn(List.of(broken, healthy));
+        when(service.findDue(TODAY, ScheduledTransferService.FIRST)).thenReturn(List.of(broken, healthy));
         when(service.claim(broken, TODAY)).thenThrow(new IllegalStateException("row in a bad state"));
         when(service.claim(healthy, TODAY)).thenReturn(Optional.of(due(healthy)));
 

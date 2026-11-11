@@ -68,8 +68,8 @@ public record CoreBankProperties(
      * is the smallest number that survives an ordinary run of bad luck without hiding a mandate
      * that genuinely cannot be honoured.
      *
-     * <p>{@code batchSize} bounds one tick, so a large backlog is worked through over several
-     * ticks rather than in one long transaction-heavy sweep.
+     * <p>{@code batchSize} is how many due mandates one query fetches. A tick works through every
+     * due mandate, a batch at a time.
      */
     public record ScheduledTransfers(
             @Positive int batchSize,

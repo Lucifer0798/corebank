@@ -173,10 +173,13 @@ public class ScheduledTransferService {
 
     // --- The half nobody asked for ------------------------------------------------------------
 
-    /** Ids that have come due on or before {@code on}, oldest first. */
+    /** Where a run starts: before every id. */
+    public static final UUID FIRST = new UUID(0, 0);
+
+    /** The next batch of mandates due on or before {@code on}, after {@code after} in id order. */
     @Transactional(readOnly = true)
-    public List<UUID> findDue(LocalDate on) {
-        return schedules.findDueIds(ScheduleStatus.ACTIVE, on, PageRequest.of(0, properties.batchSize()));
+    public List<UUID> findDue(LocalDate on, UUID after) {
+        return schedules.findDueIds(ScheduleStatus.ACTIVE, on, after, PageRequest.of(0, properties.batchSize()));
     }
 
     /**
