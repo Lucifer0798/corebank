@@ -42,13 +42,18 @@ public interface AccountHoldRepository extends JpaRepository<AccountHold, UUID> 
      * Ids of holds the sweep should expire. Ids rather than entities: each is then re-read and
      * locked in its own transaction, so one failure cannot roll back the rest of the batch --
      * the same shape {@code ScheduledTransferService} uses, for the same reason.
+     *
+     * <p>A page of the holds after {@code after}, in id order, rather than always the first page. A
+     * hold that fails to expire is still expired, so a first-page query hands it back on every
+     * fetch; starting after the last id seen is what lets a sweep move past it.
      */
     @Query("""
             SELECT h.id FROM AccountHold h
-            WHERE h.status = :status AND h.expiresAt <= :now
-            ORDER BY h.expiresAt ASC
+            WHERE h.status = :status AND h.expiresAt <= :now AND h.id > :after
+            ORDER BY h.id ASC
             """)
-    List<UUID> findExpiredIds(@Param("status") HoldStatus status, @Param("now") Instant now, Pageable pageable);
+    List<UUID> findExpiredIds(@Param("status") HoldStatus status, @Param("now") Instant now,
+                              @Param("after") UUID after, Pageable pageable);
 
     /**
      * Holds placed on this account within a window and still outstanding -- what the velocity check

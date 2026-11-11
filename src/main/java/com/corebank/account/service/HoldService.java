@@ -51,6 +51,9 @@ public class HoldService {
     /** One sweep tick. Bounded so a large backlog is worked through over several ticks. */
     static final int SWEEP_BATCH_SIZE = 50;
 
+    /** Where a sweep starts: before every id. */
+    public static final UUID FIRST = new UUID(0, 0);
+
     private final AccountHoldRepository holds;
     private final AccountService accountService;
     private final TransactionService transactionService;
@@ -206,9 +209,10 @@ public class HoldService {
 
     // --- The sweep --------------------------------------------------------------------------
 
+    /** The next batch of expired holds, after {@code after} in id order. */
     @Transactional(readOnly = true)
-    public List<UUID> findExpired() {
-        return holds.findExpiredIds(HoldStatus.ACTIVE, Instant.now(clock),
+    public List<UUID> findExpired(UUID after) {
+        return holds.findExpiredIds(HoldStatus.ACTIVE, Instant.now(clock), after,
                 PageRequest.of(0, SWEEP_BATCH_SIZE));
     }
 

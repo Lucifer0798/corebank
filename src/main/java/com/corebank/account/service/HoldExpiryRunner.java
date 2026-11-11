@@ -5,6 +5,7 @@ import com.corebank.common.security.Actors;
 import com.corebank.common.security.Actor;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,12 @@ import org.springframework.stereotype.Component;
  *
  * <p>Each hold is expired in its own transaction so one failure cannot take the batch with it --
  * the same shape {@code ScheduledTransferRunner} uses.
+ *
+ * <p>Each sweep works through <em>every</em> expired hold, a batch at a time. It used to take the
+ * first 50 and stop, which capped expiry at 50 holds every five minutes, about 14,400 a day. Past
+ * that, expired holds piled up and kept customers' money reserved. And since the first page was
+ * always the same, 50 holds that failed every time would have stopped the sweep for good. Each
+ * batch starts after the last id of the one before, which moves the sweep past them.
  */
 @Component
 @ConditionalOnProperty(prefix = "corebank.holds", name = "sweep-enabled",
@@ -50,14 +57,19 @@ public class HoldExpiryRunner {
     static final Actor ACTOR = Actor.system("hold-expiry");
 
     private void expireDue() {
-        for (UUID id : holdService.findExpired()) {
-            try {
-                holdService.expire(id);
-            } catch (RuntimeException ex) {
-                // One stuck hold must not stop the others being freed; the next tick tries again.
-                failures.increment();
-                log.warn("Could not expire hold {}: {}", id, ex.toString());
+        UUID after = HoldService.FIRST;
+        for (List<UUID> batch = holdService.findExpired(after); !batch.isEmpty();
+                batch = holdService.findExpired(after)) {
+            for (UUID id : batch) {
+                try {
+                    holdService.expire(id);
+                } catch (RuntimeException ex) {
+                    // One stuck hold must not stop the others being freed; the next sweep tries again.
+                    failures.increment();
+                    log.warn("Could not expire hold {}: {}", id, ex.toString());
+                }
             }
+            after = batch.getLast();
         }
     }
 }

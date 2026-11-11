@@ -637,6 +637,12 @@ in the database; a capture arriving then is refused on the clock rather than hon
 background job happened not to have run. The sweep only gives the customer their available balance
 back, which is why it can afford to be slow.
 
+**Each sweep reaches every expired hold.** It used to take the first 50 and stop, which capped
+expiry at 50 holds every five minutes, about 14,400 a day. Past that, expired holds piled up and
+kept customers' money reserved, and 50 holds that failed every time would have stopped the sweep
+for good, since the first page never changed. Now a sweep fetches batch after batch, each starting
+after the last id of the one before, the same way the interest run does.
+
 **The account page lists the holds behind its "On hold" figure.** For a long time it showed only the
 total: a customer could see that 4,600 was reserved, but not that it was a 4,500 hotel
 authorisation expiring on Friday. Anyone who can see the account sees each hold's description,
@@ -887,11 +893,20 @@ A one-off, or a mandate past its end date, has nothing left to run, so resuming 
 A suspended mandate can also be **cancelled**. Because it could be resumed, cancelling is how it is
 retired for good, and an account it names cannot close until that happens.
 
-**One broken mandate cannot stall the rest.** The runner works oldest first. Anything that threw
-out of the loop for one mandate (claiming its row, or recording the outcome) used to abort the
-whole tick, and the mandate stayed due. So it sat at the front of every later batch, and no
-standing order behind it ever ran. Each mandate is now isolated: such a failure is logged and
-counted (`corebank.scheduled.transfers{outcome="error"}`), and the batch carries on.
+**One broken mandate cannot stall the rest.** Anything that threw out of the loop for one mandate
+(claiming its row, or recording the outcome) used to abort the whole tick, and the mandate stayed
+due. So it sat at the front of every later batch, and no standing order behind it ever ran. Each
+mandate is now isolated: such a failure is logged and counted
+(`corebank.scheduled.transfers{outcome="error"}`), and the batch carries on.
+
+**Each tick reaches every due mandate, however many there are.** A tick used to fetch the first
+50 and stop, which capped standing orders at 50 a minute, about 72,000 a day: on a busy 1st,
+anything past that paid a day or more late. And because the first page was always the same, 50
+mandates that failed every time would have stopped the runner for good. Now a tick fetches batch
+after batch until none is left, each starting after the last id of the one before. Paging is by
+id, not due date, because a mandate several occurrences behind is still due after it posts:
+paging by date would meet it again further on and post its next occurrence in the same tick. By
+id, each mandate is met once a tick, and one occurrence per mandate per tick still holds.
 
 **Why a payment failed is shown in words safe for either side.** The refusal's own message is
 written for debugging. Insufficient funds reads "Account 100100000001 has 212.40 available but

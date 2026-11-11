@@ -19,17 +19,24 @@ import org.springframework.data.repository.query.Param;
 public interface ScheduledTransferRepository extends JpaRepository<ScheduledTransfer, UUID> {
 
     /**
-     * Ids of the mandates that have come due, oldest first. Ids rather than entities, and no lock:
-     * this is only the runner deciding what to look at. Each one is then re-read and locked in its
-     * own transaction, because a batch that shared one transaction would roll back every
-     * occurrence in it when any single transfer was refused.
+     * Ids of the mandates that have come due. Ids rather than entities, and no lock: this is only
+     * the runner deciding what to look at. Each one is then re-read and locked in its own
+     * transaction, because a batch that shared one transaction would roll back every occurrence in
+     * it when any single transfer was refused.
+     *
+     * <p>A page of the mandates after {@code after}, in id order. Id, not the due date, because the
+     * due date moves: a mandate several occurrences behind is still due after it posts, and paging
+     * by date would meet it again further on and post its next occurrence in the same tick. The id
+     * never moves, so each mandate is met once per tick. It is also what moves the runner past a
+     * mandate that fails every time, rather than fetching it again first on every page.
      */
     @Query("""
             SELECT s.id FROM ScheduledTransfer s
-            WHERE s.status = :status AND s.nextRunOn <= :on
-            ORDER BY s.nextRunOn ASC, s.id ASC
+            WHERE s.status = :status AND s.nextRunOn <= :on AND s.id > :after
+            ORDER BY s.id ASC
             """)
-    List<UUID> findDueIds(@Param("status") ScheduleStatus status, @Param("on") LocalDate on, Pageable pageable);
+    List<UUID> findDueIds(@Param("status") ScheduleStatus status, @Param("on") LocalDate on,
+                          @Param("after") UUID after, Pageable pageable);
 
     /**
      * Claims one mandate for this instance, or returns empty when another already holds it.

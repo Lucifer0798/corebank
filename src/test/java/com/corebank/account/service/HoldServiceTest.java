@@ -262,7 +262,7 @@ class HoldServiceTest {
         HoldResponse hold = place("400.00");
         HoldService later = serviceDaysFromNow(8);
 
-        inTransaction(() -> later.findExpired().forEach(later::expire));
+        inTransaction(() -> later.findExpired(HoldService.FIRST).forEach(later::expire));
 
         assertThat(holdService.get(hold.reference()).status()).isEqualTo(HoldStatus.EXPIRED);
         assertThat(available()).isEqualByComparingTo("1000.00");
