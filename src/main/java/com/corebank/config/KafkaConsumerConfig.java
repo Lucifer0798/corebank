@@ -11,7 +11,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.util.backoff.BackOff;
+import org.springframework.util.backoff.ExponentialBackOff;
 
 /**
  * A shared, single {@code spring.json.value.default.type} broke the moment a second event type
@@ -63,7 +66,31 @@ public class KafkaConsumerConfig {
         factory.setConsumerFactory(transactionConsumerFactory);
         factory.setBatchListener(true);
         factory.setConcurrency(KafkaTopicConfig.PARTITIONS);
+        factory.setCommonErrorHandler(searchIndexingErrorHandler());
         return factory;
+    }
+
+    /**
+     * What the search indexers' listeners do when a batch fails: hand the same batch back after a
+     * pause, for as long as it takes. {@code BulkIndexer} throws only for what can succeed later
+     * (OpenSearch down, timing out, overloaded) and drops what never can, so waiting for ever is
+     * waiting for OpenSearch to come back, and search catches up from Kafka when it does.
+     *
+     * <p>Spring Kafka's default handler tries ten times without pausing and then skips the batch,
+     * which at the 5-second socket timeout gives up on any outage longer than about 50 seconds.
+     *
+     * <p>Built here for each factory rather than declared as a bean: Boot applies a
+     * {@code CommonErrorHandler} bean to its own default listener factory, and this is only for search.
+     */
+    static DefaultErrorHandler searchIndexingErrorHandler() {
+        return new DefaultErrorHandler(searchIndexingBackOff());
+    }
+
+    /** One second, doubling, never more than a minute, and never giving up. */
+    static BackOff searchIndexingBackOff() {
+        ExponentialBackOff backOff = new ExponentialBackOff(1_000, 2.0);
+        backOff.setMaxInterval(60_000);
+        return backOff;
     }
 
     @Bean
@@ -105,6 +132,7 @@ public class KafkaConsumerConfig {
         // OpenSearch as one Bulk API call, not one HTTP round trip each.
         factory.setBatchListener(true);
         factory.setConcurrency(KafkaTopicConfig.PARTITIONS);
+        factory.setCommonErrorHandler(searchIndexingErrorHandler());
         return factory;
     }
 }

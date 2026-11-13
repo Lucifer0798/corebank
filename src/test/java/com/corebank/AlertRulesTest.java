@@ -13,6 +13,8 @@ import com.corebank.outbox.OutboxBacklogMonitor;
 import com.corebank.outbox.repository.OutboxEventRepository;
 import com.corebank.schedule.ScheduledTransferRunner;
 import com.corebank.schedule.service.ScheduledTransferService;
+import com.corebank.search.CustomerSearchIndexer;
+import com.corebank.search.TransactionSearchIndexer;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.io.IOException;
@@ -28,6 +30,7 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.opensearch.client.opensearch.OpenSearchClient;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.yaml.snakeyaml.Yaml;
 
@@ -63,6 +66,8 @@ class AlertRulesTest {
         new InterestRunner(mock(InterestService.class), registry);
         new HoldExpiryRunner(mock(HoldService.class), registry);
         new ScheduledTransferRunner(mock(ScheduledTransferService.class), registry, Clock.systemUTC());
+        new TransactionSearchIndexer(mock(OpenSearchClient.class), registry);
+        new CustomerSearchIndexer(mock(OpenSearchClient.class), registry);
         return registry.scrape();
     }
 
