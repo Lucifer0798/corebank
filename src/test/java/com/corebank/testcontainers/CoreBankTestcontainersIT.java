@@ -63,6 +63,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
@@ -242,6 +244,9 @@ class CoreBankTestcontainersIT {
 
     @Autowired
     private CustomerService customerService;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     private String tellerToken;
     private String adminToken;
@@ -949,6 +954,49 @@ class CoreBankTestcontainersIT {
 
     @Test
     @Order(16)
+    @DisplayName("a posting made while OpenSearch is down becomes searchable once it is back")
+    void searchCatchesUpAfterAnOpenSearchOutage() {
+        // Each index attempt against a paused OpenSearch times out after the 5-second socket
+        // timeout, the way an unreachable one would. The indexer used to log that and drop the
+        // batch, so this deposit would never have been searchable.
+        String accountId = fundedAccount(new BigDecimal("100.00"));
+        // One word: search matches any shared word, and "tc-...-marker" would also find Order(4)'s.
+        String marker = "outage" + UUID.randomUUID().toString().replace("-", "");
+        double retriesBefore = searchRetries();
+
+        var docker = OPENSEARCH.getDockerClient();
+        docker.pauseContainerCmd(OPENSEARCH.getContainerId()).exec();
+        try {
+            given().header("Authorization", "Bearer " + tellerToken)
+                    .header("Idempotency-Key", "tc-outage-" + UUID.randomUUID())
+                    .contentType(ContentType.JSON)
+                    .body(Map.of("amount", 25.00, "description", marker))
+                    .post("/accounts/{id}/deposits", accountId)
+                    .then().statusCode(201);
+
+            // Failed and come back for more at least twice: long past where the old code gave up.
+            await().atMost(Duration.ofSeconds(60)).until(() -> searchRetries() >= retriesBefore + 2);
+        } finally {
+            docker.unpauseContainerCmd(OPENSEARCH.getContainerId()).exec();
+        }
+
+        await().atMost(Duration.ofSeconds(120)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", marker)
+                        .get("/search/transactions")
+                        .then().statusCode(200)
+                        .body("totalHits", equalTo(1))
+                        .body("hits[0].description", equalTo(marker)));
+    }
+
+    /** Failed attempts the transaction indexer will retry; -1 before the counter exists. */
+    private double searchRetries() {
+        Counter retries = meterRegistry.find("corebank.search.index.retries").tag("kind", "transaction").counter();
+        return retries == null ? -1 : retries.count();
+    }
+
+    @Test
+    @Order(17)
     @DisplayName("the ledger check runs on real Postgres, finds this suite's books clean, and finds a drifted balance")
     void theLedgerCheckWorksOnPostgres() {
         // Last on purpose: by now this suite has posted real deposits, withdrawals, racing transfers

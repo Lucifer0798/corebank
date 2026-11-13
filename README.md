@@ -1202,11 +1202,29 @@ consumer group so they never interfere with the app's other listeners on those t
 OpenSearch is a downstream read projection, the same status Kafka and Redis already have here —
 never the source of truth for anything, and nothing else in the system depends on it being
 reachable. Building the client never itself talks to OpenSearch (lazy, like `KafkaTemplate`), so
-an outage at startup doesn't fail the application; a failed index attempt is logged and dropped,
-not retried, so a transient outage leaves a gap in the index rather than catching up
-automatically; and a failed search request — a transport failure or a server-side error such as
-querying an index that doesn't exist yet — comes back as a clean `503 SEARCH_UNAVAILABLE`
-instead of an unhandled `500`.
+an outage at startup doesn't fail the application; and a failed search request — a transport
+failure or a server-side error such as querying an index that doesn't exist yet — comes back as a
+clean `503 SEARCH_UNAVAILABLE` instead of an unhandled `500`.
+
+**Search catches up after an OpenSearch outage.** A failed index attempt used to be logged and
+dropped. Every posting and customer change made while OpenSearch was down stayed missing from
+search until someone ran a replay, and nothing said it was missing. Now the indexers retry what can
+succeed later and drop only what never can:
+
+- **Retried:** OpenSearch unreachable, timing out, or answering 429 or 5xx, for the whole call or
+  for any one document. The listener hands the same batch back after a pause of a second,
+  doubling to at most a minute, and never gives up. Spring Kafka's default would have tried ten
+  times without pausing and skipped the batch, which at the 5-second socket timeout gives up on
+  anything over about 50 seconds. Indexing a document twice is harmless, because each is keyed by
+  transaction reference or customer id.
+- **Dropped:** a document OpenSearch rejects as bad, any other 4xx. Retrying it would hold up
+  everything behind it for good. It is logged, and counted under
+  `corebank.background.failures{task="search-indexing"}`, which fires an alert.
+
+While OpenSearch is down, the indexers' Kafka partitions wait at the failed batch. When it answers
+again, search catches up from Kafka with nothing lost, unless the outage outlasts Kafka's
+retention: then a replay from the Admin page fills the gap. `CoreBankSearchFallingBehind` fires
+when indexing has kept failing for five minutes.
 
 **Losing OpenSearch's data doesn't lose search permanently.** `SearchIndexInitializer` backfills
 an index the instant it creates one, re-deriving every customer and transaction from the ledger
@@ -1321,7 +1339,7 @@ customer or account data.
 
 #### Alerts
 
-Prometheus evaluates four rules from [`observability/alerts.yml`](observability/alerts.yml) and
+Prometheus evaluates five rules from [`observability/alerts.yml`](observability/alerts.yml) and
 shows them on its Alerts page, <http://localhost:9090/alerts>. **Nothing sends them anywhere
 yet.** Email, Slack or paging is still to be chosen, and means adding an Alertmanager beside
 Prometheus.
@@ -1331,6 +1349,7 @@ Prometheus.
 | `CoreBankDown` | critical | Prometheus has not reached the app for a minute | Check the app is running and reachable |
 | `CoreBankLedgerDoesNotAddUp` | critical | The last [ledger check](#the-ledger-check) found anything | Admin → Ledger check lists the accounts. Decide which figure is right; the check repairs nothing |
 | `CoreBankOutboxStuck` | warning | The oldest event not yet sent to Kafka has waited over five minutes | Check Kafka. The log says why with `Could not relay outbox event`. Nothing is lost; events go once Kafka is back |
+| `CoreBankSearchFallingBehind` | warning | Indexing into OpenSearch has kept failing for five minutes | Check OpenSearch. The log says why with `Could not index`. Nothing is lost; [search catches up](#search) once OpenSearch answers |
 | `CoreBankBackgroundTaskFailing` | warning | A background task failed in the last two hours, labelled by `task` | Find the task's line in the log, below |
 
 | `task` | Log line to look for |
@@ -1340,6 +1359,7 @@ Prometheus.
 | `hold-expiry` | `Could not expire hold` |
 | `standing-orders` | `Scheduled transfer ... could not be processed`. A standing order refused for want of funds is not a failure here: the customer is told, and it shows as `corebank.scheduled.transfers{outcome="failed"}` |
 | `ledger-check` | `Ledger check could not run`. Until it runs again, the ledger alert shows the last check's verdict |
+| `search-indexing` | `Could not index ... and will not retry it`: a document OpenSearch rejected as bad, which is missing from search. Fix the cause, then replay from the Admin page |
 
 The metrics behind them:
 
@@ -1350,6 +1370,8 @@ The metrics behind them:
   what the alert watches: a busy outbox holds many events, but a healthy one never holds an old
   one.
 - `corebank.ledger.discrepancies`, by `check`, from [the ledger check](#the-ledger-check).
+- `corebank.search.index.retries`, by `kind` (`transaction` or `customer`): index attempts that
+  failed and will be tried again.
 
 Every one of these is registered at zero when the application starts. A counter created on its
 first increment is born at 1, and `increase()` needs a sample from before the change, so the

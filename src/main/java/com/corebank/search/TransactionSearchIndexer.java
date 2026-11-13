@@ -4,6 +4,7 @@ import com.corebank.transaction.messaging.TransactionEventPublisher;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
 import java.util.List;
 import java.util.Map;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch.core.bulk.BulkOperation;
 import org.slf4j.Logger;
@@ -21,19 +22,19 @@ import org.springframework.stereotype.Component;
  * <p>A batch listener rather than one record at a time: whatever arrived in a single poll goes
  * to OpenSearch as one Bulk API call instead of one HTTP round trip per transaction, which is the
  * difference that actually matters once transactions post faster than one at a time. See
- * {@link BulkIndexer} -- shared with {@code CustomerSearchIndexer} -- for the failure handling: a
- * failed index attempt is logged and dropped, not retried, since search is a downstream
- * projection and the ledger these events came from already committed successfully regardless.
+ * {@link BulkIndexer} -- shared with {@code CustomerSearchIndexer} -- for the failure handling:
+ * what can succeed later, such as OpenSearch being down, is retried until it does, and only a
+ * document OpenSearch rejects as bad is dropped.
  */
 @Component
 public class TransactionSearchIndexer {
 
     private static final Logger log = LoggerFactory.getLogger(TransactionSearchIndexer.class);
 
-    private final OpenSearchClient client;
+    private final BulkIndexer bulkIndexer;
 
-    public TransactionSearchIndexer(OpenSearchClient client) {
-        this.client = client;
+    public TransactionSearchIndexer(OpenSearchClient client, MeterRegistry meterRegistry) {
+        this.bulkIndexer = new BulkIndexer(client, log, "transaction", meterRegistry);
     }
 
     @KafkaListener(topics = TransactionEventPublisher.TOPIC, groupId = "corebank-search-indexer",
@@ -43,7 +44,7 @@ public class TransactionSearchIndexer {
             return;
         }
         List<BulkOperation> operations = events.stream().map(this::toBulkOperation).toList();
-        BulkIndexer.index(client, log, "transaction", operations);
+        bulkIndexer.index(operations);
     }
 
     private BulkOperation toBulkOperation(TransactionPostedEvent event) {

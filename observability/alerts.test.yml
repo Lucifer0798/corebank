@@ -159,3 +159,44 @@ tests:
       - eval_time: 125m
         alertname: CoreBankBackgroundTaskFailing
         exp_alerts: []
+
+  - name: CoreBankSearchFallingBehind fires when indexing keeps failing for five minutes
+    interval: 1m
+    input_series:
+      # OpenSearch goes away at 1m; the indexer retries about once a minute from then on.
+      - series: 'corebank_search_index_retries_total{job="corebank", instance="app:8080", kind="transaction"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CoreBankSearchFallingBehind
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: CoreBankSearchFallingBehind
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Search is not keeping up
+              description: >-
+                Indexing into OpenSearch has been failing for five minutes, so search is missing
+                recent postings and customer changes. Nothing is lost: the indexer keeps retrying
+                and search catches up by itself once OpenSearch answers again. The application log
+                says why with "Could not index".
+
+  - name: CoreBankSearchFallingBehind ignores a short blip
+    interval: 1m
+    input_series:
+      # Two failed attempts, then OpenSearch answers again.
+      - series: 'corebank_search_index_retries_total{job="corebank", instance="app:8080", kind="transaction"}'
+        values: '0 1 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      # During the blip, after it, and well after: never firing.
+      - eval_time: 2m
+        alertname: CoreBankSearchFallingBehind
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: CoreBankSearchFallingBehind
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: CoreBankSearchFallingBehind
+        exp_alerts: []

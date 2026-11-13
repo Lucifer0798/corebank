@@ -47,6 +47,22 @@ groups:
             Nothing is lost: every event is sent once Kafka can be reached. The application log
             says why with "Could not relay outbox event".
 
+      - alert: CoreBankSearchFallingBehind
+        # Retries in every two-minute window for five minutes. One blip retries once and is over,
+        # and during an outage the indexer retries at least once a minute, so a real one never
+        # leaves a two-minute window empty.
+        expr: sum(increase(corebank_search_index_retries_total{job="corebank"}[2m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Search is not keeping up
+          description: >-
+            Indexing into OpenSearch has been failing for five minutes, so search is missing
+            recent postings and customer changes. Nothing is lost: the indexer keeps retrying and
+            search catches up by itself once OpenSearch answers again. The application log says
+            why with "Could not index".
+
       - alert: CoreBankBackgroundTaskFailing
         # Two hours. Interest runs about hourly, so with a one-hour window an account failing every
         # run would let this clear for a moment between runs and then fire again.

@@ -5,6 +5,7 @@ import com.corebank.customer.messaging.CustomerEventPublisher;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch.core.bulk.BulkOperation;
 import org.slf4j.Logger;
@@ -15,19 +16,19 @@ import org.springframework.stereotype.Component;
 /**
  * Indexes a customer into OpenSearch on create and on every KYC/status change, keyed by the
  * customer id so a later change overwrites the earlier document rather than creating a second
- * one. See {@code TransactionSearchIndexer} for the same reasoning behind both the batch listener
- * (one Bulk API call per poll rather than one HTTP round trip per event) and the failure handling
- * here: a failed index attempt is logged and dropped, not retried.
+ * one. See {@code TransactionSearchIndexer} for the same reasoning behind the batch listener (one
+ * Bulk API call per poll rather than one HTTP round trip per event), and {@link BulkIndexer} for
+ * the failure handling: retried until it goes through, unless OpenSearch rejects a document as bad.
  */
 @Component
 public class CustomerSearchIndexer {
 
     private static final Logger log = LoggerFactory.getLogger(CustomerSearchIndexer.class);
 
-    private final OpenSearchClient client;
+    private final BulkIndexer bulkIndexer;
 
-    public CustomerSearchIndexer(OpenSearchClient client) {
-        this.client = client;
+    public CustomerSearchIndexer(OpenSearchClient client, MeterRegistry meterRegistry) {
+        this.bulkIndexer = new BulkIndexer(client, log, "customer", meterRegistry);
     }
 
     @KafkaListener(topics = CustomerEventPublisher.TOPIC, groupId = "corebank-search-indexer",
@@ -37,7 +38,7 @@ public class CustomerSearchIndexer {
             return;
         }
         List<BulkOperation> operations = events.stream().map(this::toBulkOperation).toList();
-        BulkIndexer.index(client, log, "customer", operations);
+        bulkIndexer.index(operations);
     }
 
     private BulkOperation toBulkOperation(CustomerChangedEvent event) {
