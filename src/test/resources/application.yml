@@ -21,6 +21,13 @@ spring:
           issuer-uri: http://localhost:8081/realms/corebank-test
           jwk-set-uri: http://localhost:8081/realms/corebank-test/protocol/openid-connect/certs
   kafka:
+    admin:
+      # This suite runs no broker, and Boot's KafkaAdmin otherwise tries to create
+      # KafkaTopicConfig's topics as every application context starts: 30 seconds waiting for a
+      # broker that never answers, then 10 more closing the client. With five contexts that was
+      # about 200 of the suite's ~300 seconds of test time. CoreBankTestcontainersIT, which has a
+      # real broker, turns it back on.
+      auto-create: false
     producer:
       # Matches main's application.yml explicitly rather than relying on this being absent and
       # falling back to some Boot default: OutboxRelay's KafkaTemplate<String,String> needs a
