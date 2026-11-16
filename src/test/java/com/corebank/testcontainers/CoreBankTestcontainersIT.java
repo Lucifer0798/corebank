@@ -170,6 +170,10 @@ class CoreBankTestcontainersIT {
         registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
 
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+        // The mocked-JWT suite switches topic creation off, having no broker. This one has a real
+        // broker and needs the topics KafkaTopicConfig declares: left to Kafka's auto-create on
+        // first send, they would get the broker's default of one partition, not three.
+        registry.add("spring.kafka.admin.auto-create", () -> "true");
         // No producer value-serializer override needed here (unlike an earlier phase, before the
         // outbox existed): src/test/resources/application.yml now sets StringSerializer directly,
         // matching main's own default, because the producer only ever sends pre-serialized JSON
@@ -336,6 +340,24 @@ class CoreBankTestcontainersIT {
         given().header("Authorization", "Bearer " + adminToken)
                 .get("/accounts/{id}", accountId)
                 .then().statusCode(200).body("balance", equalTo(500.00f));
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("both topics exist with the partitions KafkaTopicConfig declares, not the broker's default")
+    void topicsHaveTheDeclaredPartitions() throws Exception {
+        // By now Order(2) has published to both, so a topic nobody created up front would exist
+        // anyway, made by the broker's auto-create with a single partition. Three is what lets each
+        // listener's three consumer threads share the work.
+        try (var admin = org.apache.kafka.clients.admin.Admin.create(Map.<String, Object>of(
+                org.apache.kafka.clients.admin.AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers()))) {
+            var topics = admin.describeTopics(List.of(
+                            com.corebank.transaction.messaging.TransactionEventPublisher.TOPIC,
+                            com.corebank.customer.messaging.CustomerEventPublisher.TOPIC))
+                    .allTopicNames().get(30, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(topics.values()).hasSize(2).allSatisfy(topic -> assertThat(topic.partitions())
+                    .as(topic.name()).hasSize(com.corebank.config.KafkaTopicConfig.PARTITIONS));
+        }
     }
 
     @Test
