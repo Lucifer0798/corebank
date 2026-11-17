@@ -39,7 +39,8 @@ public class TransactionSearchIndexer {
 
     @KafkaListener(topics = TransactionEventPublisher.TOPIC, groupId = "corebank-search-indexer",
             containerFactory = "transactionSearchIndexerContainerFactory")
-    public void onTransactionsPosted(List<TransactionPostedEvent> events) {
+    public void onTransactionsPosted(List<TransactionPostedEvent> batch) {
+        List<TransactionPostedEvent> events = bulkIndexer.wellFormed(batch, TransactionPostedEvent.class);
         if (events.isEmpty()) {
             return;
         }

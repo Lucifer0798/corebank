@@ -1194,4 +1194,66 @@ class CoreBankTestcontainersIT {
         metadata.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer " + token);
         return MetadataUtils.newAttachHeadersInterceptor(metadata);
     }
+
+    @Test
+    @Order(18)
+    @DisplayName("a malformed message on either topic is skipped, and everything behind it still arrives")
+    void malformedMessagesDoNotStopTheConsumers() throws Exception {
+        // One message that is not valid JSON for its type, on every partition of both topics, so
+        // whatever comes next is behind one. Before ErrorHandlingDeserializer this stopped every
+        // consumer of the topic for good: the client threw on poll, before any listener or error
+        // handler saw a record, and polled the same offset again in a tight loop.
+        double malformedBefore = backgroundFailures("malformed-events");
+        try (var producer = new org.apache.kafka.clients.producer.KafkaProducer<String, String>(Map.<String, Object>of(
+                org.apache.kafka.clients.producer.ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
+                org.apache.kafka.clients.producer.ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                "org.apache.kafka.common.serialization.StringSerializer",
+                org.apache.kafka.clients.producer.ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                "org.apache.kafka.common.serialization.StringSerializer"))) {
+            for (String topic : List.of(com.corebank.transaction.messaging.TransactionEventPublisher.TOPIC,
+                    com.corebank.customer.messaging.CustomerEventPublisher.TOPIC)) {
+                for (int partition = 0; partition < com.corebank.config.KafkaTopicConfig.PARTITIONS; partition++) {
+                    producer.send(new org.apache.kafka.clients.producer.ProducerRecord<>(topic, partition, "malformed", "not json {")).get();
+                }
+            }
+        }
+
+        String accountId = fundedAccount(new BigDecimal("100.00"));
+        String marker = "malformed" + UUID.randomUUID().toString().replace("-", "");
+        String reference = given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", "tc-malformed-" + UUID.randomUUID())
+                .contentType(ContentType.JSON)
+                .body(Map.of("amount", 10.00, "description", marker))
+                .post("/accounts/{id}/deposits", accountId)
+                .then().statusCode(201)
+                .extract().path("reference");
+
+        // Notifications, a record listener.
+        await().atMost(Duration.ofSeconds(60)).until(() -> jdbc.queryForObject(
+                "select count(*) from notification where transaction_reference = ?", Long.class, reference) > 0);
+        // Search, a batch listener on each topic: the deposit, and the customer fundedAccount created.
+        await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", marker)
+                        .get("/search/transactions")
+                        .then().statusCode(200)
+                        .body("totalHits", equalTo(1)));
+        String customerNumber = jdbc.queryForObject(
+                "select c.customer_number from customer c join account a on a.customer_id = c.id where a.id = ?",
+                String.class, UUID.fromString(accountId));
+        await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
+                given().header("Authorization", "Bearer " + tellerToken)
+                        .queryParam("q", customerNumber)
+                        .get("/search/customers")
+                        .then().statusCode(200)
+                        .body("hits.customerNumber", org.hamcrest.Matchers.hasItem(customerNumber)));
+
+        // Skipped and counted: three partitions of each topic, by notifications and the two indexers.
+        assertThat(backgroundFailures("malformed-events") - malformedBefore).isEqualTo(9);
+    }
+
+    private double backgroundFailures(String task) {
+        Counter counter = meterRegistry.find("corebank.background.failures").tag("task", task).counter();
+        return counter == null ? 0 : counter.count();
+    }
 }

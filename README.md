@@ -1141,6 +1141,26 @@ redelivery is a quiet no-op. Without the check, it would be a constraint violati
 fails, retries, logs an error and skips the record. That is a false alarm on every redelivery. Messages are keyed by reference, so every copy of one lands on the same
 partition and is handled by the same thread, never two at once.
 
+**A database outage delays notifications rather than losing them.** The listener used to have
+Spring Kafka's default error handling: ten attempts with no pause, then skip. Any posting made
+while the database was briefly unreachable, a restart or a full connection pool, was never
+announced, and nothing counted it. Now a failure that is the database being unavailable (Spring's
+transient and resource-failure exceptions, no connection, no transaction) is retried after a
+pause of a second, doubling to a minute, for as long as it takes, and the notifications go out
+when it is back. Retrying is safe for the reason above: a redelivery is recognised. Anything else,
+a bug, will fail the same way every time and would hold up every notification behind it, so it
+is skipped at once, logged with `Could not write the notifications for`, and counted under
+`corebank.background.failures{task="notifications"}`, which fires an alert.
+
+**A malformed message is skipped, not stuck on.** Every consumer reads through an
+`ErrorHandlingDeserializer`. Before, one message that was not valid JSON for its topic stopped
+every consumer of that topic for good: the Kafka client threw while polling, before any listener
+or error handler saw a record, and the container polled the same offset again in a tight loop,
+logging about 367,000 errors a minute per partition, with notifications and search for
+everything behind it waiting. Now each consumer skips it, logs `Skipped a malformed message` or
+`Skipped N malformed`, and counts it under `corebank.background.failures{task="malformed-events"}`,
+once per consumer that reads the topic.
+
 **A reversal is announced once.** Reversing a posting publishes three events: the original, the
 correcting `REVERSAL` posting, and the original again carrying `REVERSED`. Announcing all three
 would tell the customer "500.00 INR debited" and "your credit was reversed" about one correction.
@@ -1360,6 +1380,8 @@ Prometheus.
 | `standing-orders` | `Scheduled transfer ... could not be processed`. A standing order refused for want of funds is not a failure here: the customer is told, and it shows as `corebank.scheduled.transfers{outcome="failed"}` |
 | `ledger-check` | `Ledger check could not run`. Until it runs again, the ledger alert shows the last check's verdict |
 | `search-indexing` | `Could not index ... and will not retry it`: a document OpenSearch rejected as bad, which is missing from search. Fix the cause, then replay from the Admin page |
+| `notifications` | `Could not write the notifications for`: a posting nobody was told about. A database outage is retried, not counted; this is anything else |
+| `malformed-events` | `Skipped a malformed message` or `Skipped N malformed`: a message on a topic that could not be read, skipped by each consumer of that topic. Find what wrote it |
 
 The metrics behind them:
 
