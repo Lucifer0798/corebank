@@ -38,12 +38,14 @@ final class BulkIndexer {
 
     static final String RETRIES = "corebank.search.index.retries";
     static final String TASK = "search-indexing";
+    static final String MALFORMED = "malformed-events";
 
     private final OpenSearchClient client;
     private final Logger log;
     private final String kind;
     private final Counter retries;
     private final Counter dropped;
+    private final Counter malformed;
 
     /** Takes the caller's logger, so a warning names the indexer it came from. */
     BulkIndexer(OpenSearchClient client, Logger log, String kind, MeterRegistry meterRegistry) {
@@ -56,6 +58,26 @@ final class BulkIndexer {
                 .tag("kind", kind)
                 .register(meterRegistry);
         this.dropped = BackgroundFailures.counter(meterRegistry, TASK);
+        this.malformed = BackgroundFailures.counter(meterRegistry, MALFORMED);
+    }
+
+    /**
+     * The events in a batch, without any message that could not be read as one.
+     *
+     * <p>A batch listener is handed a malformed message as an element that is not an event at all
+     * (the {@code ErrorHandlingDeserializer} in {@code KafkaConsumerConfig} leaves its value empty),
+     * and the declared {@code List<T>} does not stop it being there. Indexing it would throw, and the
+     * retry that waits out an OpenSearch outage would then hand the same batch back for ever. So it
+     * is set aside here, logged and counted.
+     */
+    <T> List<T> wellFormed(List<?> batch, Class<T> type) {
+        List<T> events = batch.stream().filter(type::isInstance).map(type::cast).toList();
+        int skipped = batch.size() - events.size();
+        if (skipped > 0) {
+            malformed.increment(skipped);
+            log.error("Skipped {} malformed {} message(s) that could not be read", skipped, kind);
+        }
+        return events;
     }
 
     void index(List<BulkOperation> operations) {

@@ -33,7 +33,8 @@ public class CustomerSearchIndexer {
 
     @KafkaListener(topics = CustomerEventPublisher.TOPIC, groupId = "corebank-search-indexer",
             containerFactory = "customerListenerContainerFactory")
-    public void onCustomersChanged(List<CustomerChangedEvent> events) {
+    public void onCustomersChanged(List<CustomerChangedEvent> batch) {
+        List<CustomerChangedEvent> events = bulkIndexer.wellFormed(batch, CustomerChangedEvent.class);
         if (events.isEmpty()) {
             return;
         }

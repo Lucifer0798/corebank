@@ -145,4 +145,23 @@ class BulkIndexerTest {
         // Counted on the attempt that settles it, not once per retry.
         assertThat(dropped()).isZero();
     }
+
+    @Test
+    @DisplayName("a message that could not be read is set aside and counted, and the rest of the batch kept")
+    void malformedMessagesAreSetAside() {
+        // A batch listener is handed a malformed message as an element that is not an event at all.
+        List<Object> batch = List.of("TXN-1", Integer.valueOf(7), "TXN-2");
+
+        assertThat(indexer.wellFormed(batch, String.class)).containsExactly("TXN-1", "TXN-2");
+
+        assertThat(meters.get(BackgroundFailures.METRIC).tag("task", "malformed-events").counter().count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a batch with nothing malformed is kept whole, and nothing is counted")
+    void aCleanBatchIsKept() {
+        assertThat(indexer.wellFormed(List.of("TXN-1", "TXN-2"), String.class)).containsExactly("TXN-1", "TXN-2");
+
+        assertThat(meters.get(BackgroundFailures.METRIC).tag("task", "malformed-events").counter().count()).isZero();
+    }
 }

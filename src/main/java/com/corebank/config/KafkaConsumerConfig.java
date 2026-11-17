@@ -1,18 +1,32 @@
 package com.corebank.config;
 
+import com.corebank.common.metrics.BackgroundFailures;
 import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientException;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.serializer.DeserializationException;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.util.backoff.BackOff;
 import org.springframework.util.backoff.ExponentialBackOff;
 
@@ -24,9 +38,22 @@ import org.springframework.util.backoff.ExponentialBackOff;
  * here instead, referenced by name from {@code @KafkaListener(containerFactory = "...")} -- the
  * same "bind the concrete type, not a shared generic one" fix already applied to the Redis cache
  * serializer in {@code CacheConfig}.
+ *
+ * <p>Every value deserializer is wrapped in an {@link ErrorHandlingDeserializer}. Without it, one
+ * message that is not valid JSON for its type stopped every consumer of its topic for good: the
+ * Kafka client throws on poll, before any listener or error handler sees a record, so the
+ * container polled the same offset in a tight loop, logging about 367,000 errors a minute per
+ * partition, while notifications and search for everything behind it waited. Wrapped, a bad
+ * message arrives as a failed record that can be skipped, and is counted under
+ * {@code corebank.background.failures{task="malformed-events"}}.
  */
 @Configuration
 public class KafkaConsumerConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(KafkaConsumerConfig.class);
+
+    static final String MALFORMED = "malformed-events";
+    static final String NOTIFICATIONS = "notifications";
 
     @Bean
     public ConsumerFactory<String, TransactionPostedEvent> transactionConsumerFactory(
@@ -34,19 +61,82 @@ public class KafkaConsumerConfig {
         JsonDeserializer<TransactionPostedEvent> deserializer = new JsonDeserializer<>(TransactionPostedEvent.class);
         deserializer.addTrustedPackages("com.corebank.transaction.messaging");
         return new DefaultKafkaConsumerFactory<>(
-                consumerProperties(kafkaProperties), new StringDeserializer(), deserializer);
+                consumerProperties(kafkaProperties), new StringDeserializer(), new ErrorHandlingDeserializer<>(deserializer));
     }
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, TransactionPostedEvent> transactionListenerContainerFactory(
-            ConsumerFactory<String, TransactionPostedEvent> transactionConsumerFactory) {
+            ConsumerFactory<String, TransactionPostedEvent> transactionConsumerFactory, MeterRegistry meterRegistry) {
         ConcurrentKafkaListenerContainerFactory<String, TransactionPostedEvent> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(transactionConsumerFactory);
         // Matches KafkaTopicConfig.PARTITIONS: one consumer thread per partition, so this
         // listener's own group can actually consume in parallel rather than leaving idle threads.
         factory.setConcurrency(KafkaTopicConfig.PARTITIONS);
+        factory.setCommonErrorHandler(notificationErrorHandler(meterRegistry));
         return factory;
+    }
+
+    /**
+     * What {@code NotificationConsumer} does when writing a notification fails.
+     *
+     * <p>It used to be Spring Kafka's default: ten attempts with no pause, then skip. A database
+     * restart or a full connection pool lasting longer than those ten attempts meant every posting
+     * in that window was never announced, and nothing counted it.
+     *
+     * <ul>
+     *   <li><b>The database being unavailable</b> is waited out: the same record again after a
+     *       pause of a second, doubling to a minute, for as long as it takes. Writing a
+     *       notification is one transaction and a redelivery is recognised and skipped, so trying
+     *       again cannot tell anyone twice.</li>
+     *   <li><b>Anything else</b>, a bug or a malformed message, will fail the same way every time,
+     *       and waiting would hold up every notification behind it. It is skipped at once, logged,
+     *       and counted, so the alert on {@code corebank.background.failures} fires.</li>
+     * </ul>
+     */
+    static DefaultErrorHandler notificationErrorHandler(MeterRegistry meterRegistry) {
+        Counter failed = BackgroundFailures.counter(meterRegistry, NOTIFICATIONS);
+        Counter malformed = BackgroundFailures.counter(meterRegistry, MALFORMED);
+        DefaultErrorHandler handler = new DefaultErrorHandler((record, ex) -> {
+            if (causedBy(ex, DeserializationException.class)) {
+                malformed.increment();
+                log.error("Skipped a malformed message on {} partition {} offset {}: {}",
+                        record.topic(), record.partition(), record.offset(), rootMessage(ex));
+            } else {
+                failed.increment();
+                log.error("Could not write the notifications for {}, and skipped it: {}", describe(record), rootMessage(ex), ex);
+            }
+        }, backOffUntilItWorks());
+        // Nothing is retried unless it is listed here: a failure nobody anticipated is far more
+        // likely to repeat than to clear, and repeating holds up every notification behind it.
+        handler.defaultFalse();
+        handler.addRetryableExceptions(TransientDataAccessException.class, RecoverableDataAccessException.class,
+                DataAccessResourceFailureException.class, CannotCreateTransactionException.class,
+                SQLTransientException.class, SQLRecoverableException.class);
+        return handler;
+    }
+
+    private static String describe(ConsumerRecord<?, ?> record) {
+        return record.value() instanceof TransactionPostedEvent event
+                ? event.reference()
+                : record.topic() + " partition " + record.partition() + " offset " + record.offset();
+    }
+
+    static boolean causedBy(Throwable thrown, Class<? extends Throwable> type) {
+        for (Throwable cause = thrown; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (type.isInstance(cause)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String rootMessage(Throwable thrown) {
+        Throwable root = thrown;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.toString();
     }
 
     /**
@@ -83,11 +173,11 @@ public class KafkaConsumerConfig {
      * {@code CommonErrorHandler} bean to its own default listener factory, and this is only for search.
      */
     static DefaultErrorHandler searchIndexingErrorHandler() {
-        return new DefaultErrorHandler(searchIndexingBackOff());
+        return new DefaultErrorHandler(backOffUntilItWorks());
     }
 
     /** One second, doubling, never more than a minute, and never giving up. */
-    static BackOff searchIndexingBackOff() {
+    static BackOff backOffUntilItWorks() {
         ExponentialBackOff backOff = new ExponentialBackOff(1_000, 2.0);
         backOff.setMaxInterval(60_000);
         return backOff;
@@ -98,7 +188,7 @@ public class KafkaConsumerConfig {
         JsonDeserializer<CustomerChangedEvent> deserializer = new JsonDeserializer<>(CustomerChangedEvent.class);
         deserializer.addTrustedPackages("com.corebank.customer.messaging");
         return new DefaultKafkaConsumerFactory<>(
-                consumerProperties(kafkaProperties), new StringDeserializer(), deserializer);
+                consumerProperties(kafkaProperties), new StringDeserializer(), new ErrorHandlingDeserializer<>(deserializer));
     }
 
     /**

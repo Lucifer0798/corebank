@@ -3,13 +3,18 @@ package com.corebank.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import com.corebank.common.metrics.BackgroundFailures;
 import com.corebank.customer.messaging.CustomerChangedEvent;
 import com.corebank.transaction.messaging.TransactionPostedEvent;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.listener.ListenerExecutionFailedException;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.BackOffExecution;
 
@@ -26,7 +31,7 @@ class SearchIndexingRetryTest {
     @Test
     @DisplayName("the pause starts at a second, doubles, stops growing at a minute, and never gives up")
     void theScheduleNeverGivesUp() {
-        BackOffExecution execution = KafkaConsumerConfig.searchIndexingBackOff().start();
+        BackOffExecution execution = KafkaConsumerConfig.backOffUntilItWorks().start();
 
         List<Long> pauses = new ArrayList<>();
         // A week of one-minute pauses: far past anything that stops.
@@ -41,19 +46,27 @@ class SearchIndexingRetryTest {
     }
 
     @Test
-    @DisplayName("both search indexers' listeners use it, and notifications' do not")
+    @DisplayName("both search indexers' listeners use it, and notifications' have their own")
     @SuppressWarnings("unchecked")
-    void onlyTheSearchListenersUseIt() {
+    void eachListenerHasItsHandler() {
         KafkaConsumerConfig config = new KafkaConsumerConfig();
         ConsumerFactory<String, TransactionPostedEvent> transactions = mock(ConsumerFactory.class);
         ConsumerFactory<String, CustomerChangedEvent> customers = mock(ConsumerFactory.class);
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
         assertThat(config.transactionSearchIndexerContainerFactory(transactions).createContainer("t")
                 .getCommonErrorHandler()).isInstanceOf(DefaultErrorHandler.class);
         assertThat(config.customerListenerContainerFactory(customers).createContainer("c")
                 .getCommonErrorHandler()).isInstanceOf(DefaultErrorHandler.class);
-        // Notifications have their own rules for a failure; this change is only for search.
-        assertThat(config.transactionListenerContainerFactory(transactions).createContainer("t")
-                .getCommonErrorHandler()).isNull();
+
+        // The notifications one skips and counts what will not clear, where search's retries
+        // everything: tell them apart by what each does with a bug.
+        var notifications = config.transactionListenerContainerFactory(transactions, meters).createContainer("t");
+        DefaultErrorHandler handler = (DefaultErrorHandler) notifications.getCommonErrorHandler();
+        Consumer<?, ?> consumer = mock(Consumer.class);
+        handler.handleRemaining(new ListenerExecutionFailedException("bug", new IllegalStateException("a bug")),
+                List.of(new ConsumerRecord<>("corebank.transactions.posted", 0, 7L, "k", "v")), consumer, notifications);
+        assertThat(meters.get(BackgroundFailures.METRIC).tag("task", KafkaConsumerConfig.NOTIFICATIONS).counter().count())
+                .isEqualTo(1);
     }
 }
