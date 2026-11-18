@@ -13,7 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import Principal, current_principal
@@ -92,11 +92,25 @@ def _corebank() -> CoreBankClient:
     return state["corebank"]  # type: ignore[return-value]
 
 
-@app.get("/health", response_model=HealthResponse, tags=["ops"])
-async def health() -> HealthResponse:
-    """Unauthenticated, like CoreBank's own /actuator/health -- a container probe has no token."""
+def _consumer() -> TransactionConsumer:
+    return state["consumer"]  # type: ignore[return-value]
+
+
+@app.get("/health", response_model=HealthResponse, tags=["ops"],
+         responses={503: {"model": HealthResponse, "description": "The Kafka consumer has stopped"}})
+async def health(response: Response) -> HealthResponse:
+    """Unauthenticated, like CoreBank's own /actuator/health -- a container probe has no token.
+
+    DOWN, with a 503, once the Kafka consumer has stopped. It used to say UP regardless, so a
+    consumer that had died left the service answering with summaries that would never change, and
+    the liveness probe, which reads this, never restarted it.
+    """
+    running = _consumer().is_running
+    if not running:
+        response.status_code = 503
     return HealthResponse(
-        status="UP",
+        status="UP" if running else "DOWN",
+        consumer_running=running,
         categories=_categoriser().categories,
         entries_indexed=await _store().count(),
     )

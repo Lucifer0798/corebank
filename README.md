@@ -1308,6 +1308,27 @@ were single-currency. To correct rows written before this, replay the affected p
 (`POST /api/v1/admin/outbox/replay/transactions`): the store upserts on (reference, account), so
 each row's currency is rewritten in place.
 
+**One malformed message no longer stops it for good.** The consumer used to parse JSON in
+aiokafka's `value_deserializer`, which raised out of the client's own iterator, outside any
+`try`. The consuming task ended quietly, and since its offset never moved past the bad message,
+every restart ended the same way: insights stopped storing anything while `/health` said UP. Now
+the bytes are parsed where a failure can be caught, and a malformed message is logged
+(`Skipped a malformed message`) and skipped.
+
+**A database outage is waited out, not lost.** Every failure to store an event used to be logged
+and skipped, and with auto-commit on, that row was gone, so summaries quietly under-counted. Now
+the database being unavailable (a lost or refused connection, a server shutting down or starting
+up, too many connections, a socket error or timeout) is retried after a pause of a second,
+doubling to a minute, for as long as it takes. Anything else, such as an event missing a field,
+fails the same way every time and is logged and skipped. Offsets are committed by hand after
+each message is dealt with, so a crash while waiting hands the message to the next start
+instead of losing it. Storing twice is harmless: the store upserts on (reference, account).
+
+**`/health` says whether it is consuming.** It reports `consumer_running`, and answers 503 with
+status DOWN once the consumer has stopped for any reason, so the Kubernetes liveness probe, which
+reads it, restarts the pod. Insights has no metrics for Prometheus yet, so this and the log are
+how a stopped consumer shows.
+
 ### gRPC
 
 A second, **read-only** surface on port `9091`, defined by
