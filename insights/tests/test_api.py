@@ -43,6 +43,11 @@ class _FakeCategoriser:
         return ("DINING", 0.42) if description else ("UNCATEGORISED", 0.0)
 
 
+class _FakeConsumer:
+    def __init__(self, running=True):
+        self.is_running = running
+
+
 class _FakeCoreBank:
     def __init__(self, accounts=None, error=None):
         self._accounts = accounts if accounts is not None else ["100100000001"]
@@ -61,10 +66,11 @@ def wire_state():
     """Populates main.state with fakes and restores it afterwards."""
     original = dict(main.state)
 
-    def _wire(*, store=None, categoriser=None, corebank=None):
+    def _wire(*, store=None, categoriser=None, corebank=None, consumer=None):
         main.state["store"] = store or _FakeStore()
         main.state["categoriser"] = categoriser or _FakeCategoriser()
         main.state["corebank"] = corebank or _FakeCoreBank()
+        main.state["consumer"] = consumer or _FakeConsumer()
 
     yield _wire
     main.state.clear()
@@ -114,8 +120,19 @@ class TestHealth:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "UP"
+        assert body["consumer_running"] is True
         assert body["categories"] == ["DINING", "TRANSFERS", "SHOPPING"]
         assert body["entries_indexed"] == 342
+
+    def test_is_down_once_the_consumer_has_stopped(self, client, wire_state):
+        # It used to say UP regardless, so a consumer that had died left summaries frozen and the
+        # liveness probe, which reads this, never restarted the pod.
+        wire_state(consumer=_FakeConsumer(running=False))
+        response = client.get("/health")
+        assert response.status_code == 503
+        body = response.json()
+        assert body["status"] == "DOWN"
+        assert body["consumer_running"] is False
 
 
 class TestCustomerSummary:

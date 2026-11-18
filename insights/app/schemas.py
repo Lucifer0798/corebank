@@ -53,5 +53,8 @@ class CategorisePreview(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    # False once the Kafka consumer has stopped: nothing new is being stored, however healthy the
+    # rest of the service looks.
+    consumer_running: bool
     categories: list[str]
     entries_indexed: int

@@ -8,9 +8,12 @@ returns.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import asyncpg
 import pytest
 
 from app.consumer import TransactionConsumer, _is_customer_account, _signed_amount
@@ -175,3 +178,142 @@ class TestHandle:
         await transaction_consumer._handle(_deposit_event())
 
         assert store.upserts[0]["currency"] == "INR"
+
+
+class _Message:
+    def __init__(self, value: bytes, offset: int) -> None:
+        self.value = value
+        self.offset = offset
+        self.topic = "corebank.transactions.posted"
+        self.partition = 0
+
+
+class _FakeKafka:
+    """Stands in for AIOKafkaConsumer in _run: yields the given messages, records each commit."""
+
+    def __init__(self, messages, journal: list) -> None:
+        self._messages = messages
+        self._journal = journal
+        self._position = None
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for message in self._messages:
+            self._position = message.offset
+            yield message
+
+    async def commit(self):
+        self._journal.append(("commit", self._position))
+
+    async def stop(self):
+        self._journal.append(("stopped", None))
+
+
+class _JournalStore:
+    """Records each stored reference in the shared journal; fails the first `failures` times."""
+
+    def __init__(self, journal: list, failures=0, error=None) -> None:
+        self._journal = journal
+        self._failures = failures
+        self._error = error
+
+    async def upsert_entry(self, **row):
+        if self._failures:
+            self._failures -= 1
+            raise self._error
+        self._journal.append(("stored", row["reference"]))
+
+
+def _encoded(reference: str) -> bytes:
+    return json.dumps(_deposit_event(reference=reference)).encode()
+
+
+class TestRun:
+    """What _run does with each message: store it, skip it, or wait for the database."""
+
+    @pytest.fixture
+    def journal(self):
+        return []
+
+    @pytest.fixture
+    def pauses(self):
+        return []
+
+    def _consumer(self, store, pauses):
+        async def record_pause(seconds):
+            pauses.append(seconds)
+            # A consumer that retries something for ever would otherwise hang the test run.
+            if len(pauses) > 50:
+                raise AssertionError(f"still retrying after {len(pauses)} pauses")
+
+        return TransactionConsumer(bootstrap_servers="unused:9092", topic="unused", group_id="unused",
+                                   store=store, categoriser=_StubCategoriser(), sleep=record_pause)
+
+    async def _run(self, consumer, messages, journal):
+        consumer._consumer = _FakeKafka(messages, journal)
+        await consumer._run()
+
+    async def test_a_malformed_message_is_skipped_and_the_next_stored(self, journal, pauses):
+        # It used to end the consuming task, and every restart ended it again on the same message.
+        consumer = self._consumer(_JournalStore(journal), pauses)
+        await self._run(consumer, [_Message(_encoded("TXN-A"), 0), _Message(b"not json {", 1),
+                                   _Message(_encoded("TXN-B"), 2)], journal)
+
+        assert [ref for kind, ref in journal if kind == "stored"] == ["TXN-A", "TXN-B"]
+        assert [offset for kind, offset in journal if kind == "commit"] == [0, 1, 2]
+        assert pauses == []
+
+    async def test_bytes_that_are_not_even_text_are_skipped(self, journal, pauses):
+        consumer = self._consumer(_JournalStore(journal), pauses)
+        await self._run(consumer, [_Message(bytes([0xFF, 0xFE, 0x00]), 0), _Message(_encoded("TXN-B"), 1)], journal)
+
+        assert [ref for kind, ref in journal if kind == "stored"] == ["TXN-B"]
+
+    @pytest.mark.parametrize("error", [
+        asyncpg.exceptions.ConnectionDoesNotExistError("connection was closed in the middle of operation"),
+        asyncpg.exceptions.CannotConnectNowError("the database system is starting up"),
+        asyncpg.exceptions.TooManyConnectionsError("sorry, too many clients already"),
+        ConnectionRefusedError("[Errno 111] Connection refused"),
+        TimeoutError(),
+    ], ids=["connection-lost", "starting-up", "too-many-connections", "refused", "timeout"])
+    async def test_a_database_outage_is_waited_out_not_skipped(self, journal, pauses, error):
+        # It used to be logged and skipped, and with auto-commit on, the row was simply gone.
+        consumer = self._consumer(_JournalStore(journal, failures=3, error=error), pauses)
+        await self._run(consumer, [_Message(_encoded("TXN-A"), 0)], journal)
+
+        assert pauses == [1, 2, 4]
+        # Stored once it could be, and only then committed.
+        assert journal == [("stored", "TXN-A"), ("commit", 0)]
+
+    async def test_the_pause_doubles_and_stops_growing_at_a_minute(self, journal, pauses):
+        consumer = self._consumer(_JournalStore(journal, failures=9, error=ConnectionResetError()), pauses)
+        await self._run(consumer, [_Message(_encoded("TXN-A"), 0)], journal)
+
+        assert pauses == [1, 2, 4, 8, 16, 32, 60, 60, 60]
+        assert journal == [("stored", "TXN-A"), ("commit", 0)]
+
+    async def test_an_event_missing_what_it_needs_is_skipped_not_retried(self, journal, pauses):
+        # The same failure every time: waiting would hold up every event behind it for nothing.
+        consumer = self._consumer(_JournalStore(journal), pauses)
+        no_timestamp = json.dumps({"reference": "TXN-BAD", "legs": []}).encode()
+        await self._run(consumer, [_Message(no_timestamp, 0), _Message(_encoded("TXN-B"), 1)], journal)
+
+        assert pauses == []
+        assert [ref for kind, ref in journal if kind == "stored"] == ["TXN-B"]
+        assert [offset for kind, offset in journal if kind == "commit"] == [0, 1]
+
+    async def test_stopping_after_the_consumer_died_does_not_raise(self, journal, pauses):
+        consumer = self._consumer(_JournalStore(journal), pauses)
+
+        async def died():
+            raise RuntimeError("the broker went away")
+
+        consumer._consumer = _FakeKafka([], journal)
+        consumer._task = asyncio.create_task(died())
+        await asyncio.sleep(0)
+
+        assert not consumer.is_running
+        await consumer.stop()
+        assert ("stopped", None) in journal
