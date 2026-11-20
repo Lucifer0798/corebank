@@ -285,3 +285,27 @@ class TestCategorisePreview:
             headers={"Authorization": "Bearer x"},
         )
         assert corebank.calls == []
+
+
+class TestMetrics:
+    def test_is_unauthenticated_and_has_every_series_from_the_start(self, client):
+        response = client.get("/metrics")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/plain")
+        body = response.text
+        # At zero before anything has happened: an alert needs a sample from before the first event.
+        for series in ('insights_events_total{outcome="stored"}', 'insights_events_total{outcome="malformed"}',
+                       'insights_events_total{outcome="skipped"}', "insights_store_retries_total",
+                       "insights_consumer_running"):
+            assert series in body, series
+
+    def test_consumer_running_follows_the_consumer(self, client):
+        from app import metrics
+
+        running = {"now": True}
+        metrics.report_consumer(lambda: running["now"])
+        assert "insights_consumer_running 1.0" in client.get("/metrics").text
+
+        running["now"] = False
+        assert "insights_consumer_running 0.0" in client.get("/metrics").text
+

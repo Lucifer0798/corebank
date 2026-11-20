@@ -200,3 +200,127 @@ tests:
       - eval_time: 8m
         alertname: CoreBankSearchFallingBehind
         exp_alerts: []
+
+  - name: CoreBankInsightsNotConsuming fires when the consumer has stopped for two minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="insights", instance="insights:8000"}'
+        values: '1 1 1 1 1 1'
+      - series: 'insights_consumer_running{job="insights", instance="insights:8000"}'
+        values: '1 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CoreBankInsightsNotConsuming
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CoreBankInsightsNotConsuming
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: insights
+              instance: insights:8000
+            exp_annotations:
+              summary: Spending insights is not taking in new transactions
+              description: >-
+                For two minutes the insights service has been unreachable, or its Kafka consumer has
+                stopped. Spending summaries are frozen at what was stored before. Its /health answers
+                503 when the consumer has stopped, so Kubernetes restarts it; the log says why with
+                "The insights consumer has stopped".
+
+  - name: CoreBankInsightsNotConsuming fires when the service itself is unreachable
+    interval: 1m
+    input_series:
+      - series: 'up{job="insights", instance="insights:8000"}'
+        values: '1 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CoreBankInsightsNotConsuming
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: insights
+              instance: insights:8000
+            exp_annotations:
+              summary: Spending insights is not taking in new transactions
+              description: >-
+                For two minutes the insights service has been unreachable, or its Kafka consumer has
+                stopped. Spending summaries are frozen at what was stored before. Its /health answers
+                503 when the consumer has stopped, so Kubernetes restarts it; the log says why with
+                "The insights consumer has stopped".
+
+  - name: CoreBankInsightsNotConsuming ignores a minute-long restart
+    interval: 1m
+    input_series:
+      - series: 'up{job="insights", instance="insights:8000"}'
+        values: '1 0 1 1 1 1'
+      - series: 'insights_consumer_running{job="insights", instance="insights:8000"}'
+        values: '1 _ 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CoreBankInsightsNotConsuming
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: CoreBankInsightsNotConsuming
+        exp_alerts: []
+
+  - name: CoreBankInsightsStoreFailing fires when storing keeps failing for five minutes
+    interval: 1m
+    input_series:
+      - series: 'insights_store_retries_total{job="insights", instance="insights:8000"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CoreBankInsightsStoreFailing
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: CoreBankInsightsStoreFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Spending insights cannot reach its database
+              description: >-
+                Insights has been retrying to store transactions for five minutes, so spending
+                summaries are missing recent ones. Nothing is lost: it keeps retrying and catches up
+                once the database answers. The log says why with "because the database is
+                unavailable".
+
+  - name: CoreBankInsightsStoreFailing ignores a short blip
+    interval: 1m
+    input_series:
+      - series: 'insights_store_retries_total{job="insights", instance="insights:8000"}'
+        values: '0 1 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CoreBankInsightsStoreFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: CoreBankInsightsStoreFailing
+        exp_alerts: []
+
+  - name: CoreBankInsightsSkippingEvents fires on a malformed event, and not on stored ones
+    interval: 1m
+    input_series:
+      - series: 'insights_events_total{job="insights", instance="insights:8000", outcome="stored"}'
+        values: '0 5 10 15 20'
+      - series: 'insights_events_total{job="insights", instance="insights:8000", outcome="malformed"}'
+        values: '0 0 1 1 1'
+      - series: 'insights_events_total{job="insights", instance="insights:8000", outcome="skipped"}'
+        values: '0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CoreBankInsightsSkippingEvents
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: CoreBankInsightsSkippingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              outcome: malformed
+            exp_annotations:
+              summary: "Spending insights skipped malformed events"
+              description: >-
+                Insights has skipped at least one malformed event in the last two hours, so
+                spending summaries are missing it. The log names it: "Skipped a malformed message"
+                or "Skipped an event that could not be processed". Fix the cause, then replay the
+                period from the Admin page.

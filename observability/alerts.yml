@@ -75,3 +75,44 @@ groups:
             The {{ $labels.task }} task has failed at least once in the last two hours. The rest of
             its work carried on. The application log names what failed and why; the README's
             Observability section says which line to look for.
+
+      - alert: CoreBankInsightsNotConsuming
+        # Down, or up with a consumer that has stopped: either way nothing new is being stored.
+        expr: up{job="insights"} == 0 or insights_consumer_running{job="insights"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Spending insights is not taking in new transactions
+          description: >-
+            For two minutes the insights service has been unreachable, or its Kafka consumer has
+            stopped. Spending summaries are frozen at what was stored before. Its /health answers
+            503 when the consumer has stopped, so Kubernetes restarts it; the log says why with
+            "The insights consumer has stopped".
+
+      - alert: CoreBankInsightsStoreFailing
+        # The same shape as search falling behind: retries in every two-minute window for five
+        # minutes. One blip retries once; an outage retries at least once a minute.
+        expr: sum(increase(insights_store_retries_total{job="insights"}[2m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Spending insights cannot reach its database
+          description: >-
+            Insights has been retrying to store transactions for five minutes, so spending
+            summaries are missing recent ones. Nothing is lost: it keeps retrying and catches up
+            once the database answers. The log says why with "because the database is
+            unavailable".
+
+      - alert: CoreBankInsightsSkippingEvents
+        expr: sum by (outcome) (increase(insights_events_total{job="insights", outcome=~"malformed|skipped"}[2h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spending insights skipped {{ $labels.outcome }} events"
+          description: >-
+            Insights has skipped at least one {{ $labels.outcome }} event in the last two hours,
+            so spending summaries are missing it. The log names it: "Skipped a malformed message"
+            or "Skipped an event that could not be processed". Fix the cause, then replay the
+            period from the Admin page.

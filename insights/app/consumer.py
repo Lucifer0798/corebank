@@ -33,6 +33,7 @@ from decimal import Decimal
 import asyncpg
 from aiokafka import AIOKafkaConsumer
 
+from . import metrics
 from .model import Categoriser
 from .store import Store
 
@@ -133,6 +134,7 @@ class TransactionConsumer:
             event = json.loads(message.value)
         except ValueError:
             # Covers a bad UTF-8 decode too: UnicodeDecodeError is a ValueError.
+            metrics.MALFORMED.inc()
             log.error("Skipped a malformed message on %s partition %s offset %s",
                       message.topic, message.partition, message.offset)
             return
@@ -141,14 +143,17 @@ class TransactionConsumer:
         while True:
             try:
                 await self._handle(event)
+                metrics.STORED.inc()
                 return
             except DATABASE_UNAVAILABLE as unavailable:
+                metrics.STORE_RETRIES.inc()
                 pause = min(MAX_PAUSE_SECONDS, 2 ** attempt)
                 attempt += 1
                 log.warning("Could not store %s because the database is unavailable; trying again in %ss: %r",
                             _reference_of(event), pause, unavailable)
                 await self._sleep(pause)
             except Exception:
+                metrics.SKIPPED.inc()
                 log.exception("Skipped an event that could not be processed: %s on %s partition %s offset %s",
                               _reference_of(event), message.topic, message.partition, message.offset)
                 return
