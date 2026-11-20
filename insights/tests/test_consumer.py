@@ -16,6 +16,8 @@ from decimal import Decimal
 import asyncpg
 import pytest
 
+from prometheus_client import REGISTRY
+
 from app.consumer import TransactionConsumer, _is_customer_account, _signed_amount
 
 
@@ -317,3 +319,47 @@ class TestRun:
         assert not consumer.is_running
         await consumer.stop()
         assert ("stopped", None) in journal
+
+
+def _counted(name: str, **labels) -> float:
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+class TestCounting:
+    """What Prometheus is told. The counters are process-wide, so each test reads what it added."""
+
+    def _consumer(self, store, pauses):
+        async def record_pause(seconds):
+            pauses.append(seconds)
+
+        return TransactionConsumer(bootstrap_servers="unused:9092", topic="unused", group_id="unused",
+                                   store=store, categoriser=_StubCategoriser(), sleep=record_pause)
+
+    async def test_each_outcome_is_counted(self):
+        journal, pauses = [], []
+        before = {outcome: _counted("insights_events_total", outcome=outcome)
+                  for outcome in ("stored", "malformed", "skipped")}
+        consumer = self._consumer(_JournalStore(journal), pauses)
+        consumer._consumer = _FakeKafka([
+            _Message(_encoded("TXN-A"), 0),
+            _Message(b"not json {", 1),
+            _Message(json.dumps({"reference": "TXN-BAD", "legs": []}).encode(), 2),
+            _Message(_encoded("TXN-B"), 3),
+        ], journal)
+        await consumer._run()
+
+        assert _counted("insights_events_total", outcome="stored") - before["stored"] == 2
+        assert _counted("insights_events_total", outcome="malformed") - before["malformed"] == 1
+        assert _counted("insights_events_total", outcome="skipped") - before["skipped"] == 1
+
+    async def test_each_database_retry_is_counted(self):
+        journal, pauses = [], []
+        before_retries = _counted("insights_store_retries_total")
+        before_stored = _counted("insights_events_total", outcome="stored")
+        consumer = self._consumer(_JournalStore(journal, failures=3, error=ConnectionResetError()), pauses)
+        consumer._consumer = _FakeKafka([_Message(_encoded("TXN-A"), 0)], journal)
+        await consumer._run()
+
+        assert _counted("insights_store_retries_total") - before_retries == 3
+        assert _counted("insights_events_total", outcome="stored") - before_stored == 1
+

@@ -1326,8 +1326,22 @@ instead of losing it. Storing twice is harmless: the store upserts on (reference
 
 **`/health` says whether it is consuming.** It reports `consumer_running`, and answers 503 with
 status DOWN once the consumer has stopped for any reason, so the Kubernetes liveness probe, which
-reads it, restarts the pod. Insights has no metrics for Prometheus yet, so this and the log are
-how a stopped consumer shows.
+reads it, restarts the pod.
+
+**Prometheus watches it too.** Insights serves `/metrics`, unauthenticated like CoreBank's
+`/actuator/prometheus`, and Prometheus scrapes it as job `insights`. Before, nothing here was
+scraped, so a stopped consumer, an unreachable database or skipped events showed only in the log.
+Three alerts, in [Alerts](#alerts), watch:
+
+- `insights_events_total`, by `outcome`: `stored`, or skipped as `malformed` or as unusable
+  (`skipped`).
+- `insights_store_retries_total`: attempts to store an event that failed because the database was
+  unavailable, and will be retried.
+- `insights_consumer_running`: 1 while the Kafka consumer is consuming, 0 once it has stopped.
+
+All exist from start-up at zero, for the same reason as CoreBank's own. `test_alert_rules.py`
+checks every `insights_*` metric a rule names is one this service exports, and that Prometheus is
+configured to scrape it.
 
 ### gRPC
 
@@ -1380,7 +1394,7 @@ customer or account data.
 
 #### Alerts
 
-Prometheus evaluates five rules from [`observability/alerts.yml`](observability/alerts.yml) and
+Prometheus evaluates eight rules from [`observability/alerts.yml`](observability/alerts.yml) and
 shows them on its Alerts page, <http://localhost:9090/alerts>. **Nothing sends them anywhere
 yet.** Email, Slack or paging is still to be chosen, and means adding an Alertmanager beside
 Prometheus.
@@ -1392,6 +1406,9 @@ Prometheus.
 | `CoreBankOutboxStuck` | warning | The oldest event not yet sent to Kafka has waited over five minutes | Check Kafka. The log says why with `Could not relay outbox event`. Nothing is lost; events go once Kafka is back |
 | `CoreBankSearchFallingBehind` | warning | Indexing into OpenSearch has kept failing for five minutes | Check OpenSearch. The log says why with `Could not index`. Nothing is lost; [search catches up](#search) once OpenSearch answers |
 | `CoreBankBackgroundTaskFailing` | warning | A background task failed in the last two hours, labelled by `task` | Find the task's line in the log, below |
+| `CoreBankInsightsNotConsuming` | warning | [Spending insights](#spending-insights) has been unreachable, or its consumer stopped, for two minutes | Kubernetes restarts it on its own, since `/health` answers 503. The log says why with `The insights consumer has stopped` |
+| `CoreBankInsightsStoreFailing` | warning | Insights has kept failing to reach its database for five minutes | Check its Postgres. Nothing is lost; it catches up once the database answers |
+| `CoreBankInsightsSkippingEvents` | warning | Insights skipped a `malformed` or `skipped` event in the last two hours, labelled by `outcome` | The log names it. Fix the cause, then replay the period from the Admin page |
 
 | `task` | Log line to look for |
 |---|---|
@@ -1415,6 +1432,7 @@ The metrics behind them:
 - `corebank.ledger.discrepancies`, by `check`, from [the ledger check](#the-ledger-check).
 - `corebank.search.index.retries`, by `kind` (`transaction` or `customer`): index attempts that
   failed and will be tried again.
+- Insights' own three, from its `/metrics`: see [Spending insights](#spending-insights).
 
 Every one of these is registered at zero when the application starts. A counter created on its
 first increment is born at 1, and `increase()` needs a sample from before the change, so the

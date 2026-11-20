@@ -18,6 +18,7 @@ import uuid
 
 import pytest
 from aiokafka import AIOKafkaProducer
+from prometheus_client import REGISTRY
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
@@ -103,6 +104,8 @@ def _consumer(bootstrap_servers, topic, group, store):
 async def test_a_malformed_message_does_not_stop_it(bootstrap_servers):
     topic, group = f"insights-test-{uuid.uuid4().hex}", f"insights-test-{uuid.uuid4().hex}"
     await _publish(bootstrap_servers, topic, _event("TXN-BEFORE"), b"not json {", _event("TXN-AFTER"))
+    stored_before = _counted("stored")
+    malformed_before = _counted("malformed")
 
     store = _Store()
     consumer = _consumer(bootstrap_servers, topic, group, store)
@@ -111,8 +114,15 @@ async def test_a_malformed_message_does_not_stop_it(bootstrap_servers):
         await _until(lambda: "TXN-AFTER" in store.references)
         assert store.references == ["TXN-BEFORE", "TXN-AFTER"]
         assert consumer.is_running
+        # And Prometheus is told: two stored, one skipped as malformed.
+        assert _counted("stored") - stored_before == 2
+        assert _counted("malformed") - malformed_before == 1
     finally:
         await consumer.stop()
+
+
+def _counted(outcome: str) -> float:
+    return REGISTRY.get_sample_value("insights_events_total", {"outcome": outcome}) or 0.0
 
 
 async def test_a_restart_carries_on_after_what_was_handled(bootstrap_servers):

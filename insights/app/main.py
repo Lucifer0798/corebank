@@ -15,7 +15,9 @@ from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from . import metrics
 from .auth import Principal, current_principal
 from .config import settings
 from .consumer import TransactionConsumer
@@ -53,6 +55,7 @@ async def lifespan(_: FastAPI):
         categoriser=categoriser,
     )
     await consumer.start()
+    metrics.report_consumer(lambda: consumer.is_running)
     state.update(categoriser=categoriser, store=store, corebank=corebank, consumer=consumer)
     try:
         yield
@@ -94,6 +97,13 @@ def _corebank() -> CoreBankClient:
 
 def _consumer() -> TransactionConsumer:
     return state["consumer"]  # type: ignore[return-value]
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    """For Prometheus. Unauthenticated, like CoreBank's /actuator/prometheus: a scraper has no token,
+    and nothing here identifies a customer or an account."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"],
