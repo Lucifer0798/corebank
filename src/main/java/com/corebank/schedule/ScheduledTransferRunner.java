@@ -1,5 +1,6 @@
 package com.corebank.schedule;
 
+import com.corebank.common.exception.ApiException;
 import com.corebank.common.metrics.BackgroundFailures;
 import com.corebank.common.security.Actor;
 import com.corebank.common.security.Actors;
@@ -111,6 +112,15 @@ public class ScheduledTransferRunner {
             count("posted");
             log.info("Scheduled transfer {} posted its {} occurrence", id, occurrence.dueOn());
         } catch (RuntimeException ex) {
+            if (notYetSettled(ex)) {
+                // The occurrence's key is held by an attempt that never finished, or one this tick
+                // lost to a retry. Neither says the payment was refused, and it may yet have gone
+                // out, so it is not recorded as missed. It is still due, and the next tick tries
+                // again: a claim left by a crash is taken over once it is a minute old.
+                log.warn("Scheduled transfer {} left its {} occurrence for the next tick: {}",
+                        id, occurrence.dueOn(), ex.getMessage());
+                return;
+            }
             // Insufficient funds is the expected case and is not an application fault, so this
             // logs at WARN with the reason rather than dumping a stack trace every time an
             // account happens to be short on the first of the month.
@@ -119,6 +129,11 @@ public class ScheduledTransferRunner {
             log.warn("Scheduled transfer {} could not post its {} occurrence: {}",
                     id, occurrence.dueOn(), ex.toString());
         }
+    }
+
+    private static boolean notYetSettled(RuntimeException failure) {
+        return failure instanceof ApiException api
+                && ("REQUEST_IN_PROGRESS".equals(api.getCode()) || "IDEMPOTENCY_CLAIM_LOST".equals(api.getCode()));
     }
 
     private void count(String outcome) {

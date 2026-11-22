@@ -50,8 +50,16 @@ public class IdempotencyRecord {
     @Column(name = "response_body", length = 8000)
     private String responseBody;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
+    /** When the current claim was made: the first request's, or the retry's that took it over. */
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+
+    /**
+     * Which request holds the claim. Null on claims made before tokens existed, which are never
+     * taken over: see V24__idempotency_claim_token.sql.
+     */
+    @Column(name = "claim_token")
+    private UUID claimToken;
 
     @Column(name = "completed_at")
     private Instant completedAt;

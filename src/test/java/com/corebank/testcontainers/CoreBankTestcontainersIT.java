@@ -252,6 +252,9 @@ class CoreBankTestcontainersIT {
     @Autowired
     private MeterRegistry meterRegistry;
 
+    @Autowired
+    private com.corebank.idempotency.IdempotencyService idempotencyService;
+
     private String tellerToken;
     private String adminToken;
     private String customerToken;
@@ -1255,5 +1258,52 @@ class CoreBankTestcontainersIT {
     private double backgroundFailures(String task) {
         Counter counter = meterRegistry.find("corebank.background.failures").tag("task", task).counter();
         return counter == null ? 0 : counter.count();
+    }
+
+    @Test
+    @Order(19)
+    @DisplayName("an abandoned idempotency claim is taken over on Postgres, and one from before claim tokens is not")
+    void abandonedIdempotencyClaimsOnPostgres() {
+        // What a crash between claiming a key and completing it leaves. The body is sent as written
+        // here, so the planted claim's request hash matches what the controller computes from it.
+        String accountId = fundedAccount(new BigDecimal("100.00"));
+        String body = "{\"amount\":30.00,\"description\":\"abandoned claim\"}";
+        String hash = idempotencyService.requestHash(new com.corebank.transaction.dto.AmountRequest(
+                new BigDecimal("30.00"), null, "abandoned claim"));
+        String abandonedKey = "tc-abandoned-" + UUID.randomUUID();
+        String legacyKey = "tc-legacy-" + UUID.randomUUID();
+        String insert = """
+                insert into idempotency_record (id, scope, idempotency_key, request_hash, status, created_at, claim_token)
+                values (?, ?, ?, ?, 'IN_PROGRESS', ?, ?)
+                """;
+        jdbc.update(insert, UUID.randomUUID(), "deposit:" + accountId, abandonedKey, hash,
+                java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(300)), UUID.randomUUID());
+        jdbc.update(insert, UUID.randomUUID(), "deposit:" + accountId, legacyKey, hash,
+                java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(86_400)), null);
+
+        for (String replayed : List.of("false", "true")) {
+            given().header("Authorization", "Bearer " + tellerToken)
+                    .header("Idempotency-Key", abandonedKey)
+                    .contentType(ContentType.JSON)
+                    .body(body)
+                    .post("/accounts/{id}/deposits", accountId)
+                    .then().statusCode(201)
+                    .header("Idempotency-Replayed", replayed);
+        }
+        given().header("Authorization", "Bearer " + tellerToken)
+                .get("/accounts/{id}", accountId)
+                .then().statusCode(200).body("balance", equalTo(130.00f));
+
+        // From before claims carried a token: it may have posted, so it is never taken over.
+        given().header("Authorization", "Bearer " + tellerToken)
+                .header("Idempotency-Key", legacyKey)
+                .contentType(ContentType.JSON)
+                .body(body)
+                .post("/accounts/{id}/deposits", accountId)
+                .then().statusCode(409)
+                .body("code", equalTo("REQUEST_IN_PROGRESS"));
+        given().header("Authorization", "Bearer " + tellerToken)
+                .get("/accounts/{id}", accountId)
+                .then().statusCode(200).body("balance", equalTo(130.00f));
     }
 }
