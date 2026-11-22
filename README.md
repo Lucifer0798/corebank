@@ -857,13 +857,19 @@ earlier for good. Anchored to the start it clamps only in the short months and r
 in the long ones.
 
 **The idempotency key is derived, not random** — `sched:<mandate id>:<due date>` — and that single
-fact is what makes the runner safe. Posting the money and recording that it was posted are
-necessarily two separate transactions (wrapping them in one would invert the order in which
-`IdempotencyService` commits a key's completion, so a rollback could leave a key marked done with
-no posting behind it). Crash in between and the occurrence is simply due again next tick: the
-transfer replays from the stored response instead of paying twice, and the bookkeeping completes.
-The `SKIP LOCKED` row claim stops two replicas doing redundant work; it is not what stops a double
-payment.
+fact is what makes the runner safe. Posting the money and recording on the mandate that it was
+posted are two separate transactions. Crash in between and the occurrence is simply due again next
+tick: the transfer replays from the stored response instead of paying twice, and the bookkeeping
+completes. The `SKIP LOCKED` row claim stops two replicas doing redundant work; it is not what stops
+a double payment.
+
+**A crash in the middle of the transfer itself is not a missed payment.** That replay used to hold
+only for a crash *after* the transfer's idempotency key was completed. A crash during the transfer
+left the key's claim stuck `IN_PROGRESS`, the next tick was answered `409 REQUEST_IN_PROGRESS`, and
+the runner took that for a refused payment: it skipped the occurrence, counted it towards
+suspension, and told the payer it had not gone out. Now a key that is still in progress, or a claim
+this tick lost to a retry, leaves the occurrence due for the next tick with nothing recorded, and a
+claim abandoned for a minute is taken over (see [Idempotency](#idempotency)).
 
 A refused occurrence — nearly always insufficient funds — is **skipped rather than retried in
 place**, because the poll interval would otherwise hammer a short account all day. Three
@@ -978,6 +984,38 @@ retry after an insufficient-funds error still works.
 
 Reusing a key with a different body returns `409` rather than quietly doing something the
 caller did not ask for.
+
+**A request that never finishes does not lock its key for good.** The operation and the claim's
+completion used to be separate transactions: the posting committed, then a second transaction
+marked the claim done. A crash or a database blip between them, or before the claim could be
+released after a failure, left it `IN_PROGRESS` with nothing to expire it, and every retry with
+that key answered `409 REQUEST_IN_PROGRESS` for good, even when the money had moved. Now:
+
+- **The operation and its completion commit together.** The posting, its outbox event and the
+  completed claim are one transaction, so a claim still `IN_PROGRESS` has changed nothing.
+- **An abandoned claim is taken over.** One still `IN_PROGRESS` a minute after it was made, far
+  longer than any request, is handed to the next identical request, which then does the work.
+- **Only one of them can ever commit.** Each claim carries a token, and completion succeeds only
+  while the token is the caller's. If the original request was only slow, its completion finds the
+  token gone and its whole operation rolls back with `409 IDEMPOTENCY_CLAIM_LOST`; retrying with
+  the same key returns the outcome. Two retries racing to take over one claim cannot both win.
+- **Claims from before this have no token and are never taken over.** They were made when
+  completion was separate, so an `IN_PROGRESS` one may have posted. Any still stuck can be found,
+  with whether a posting carries the same key, by:
+
+  ```sql
+  SELECT r.scope, r.idempotency_key, r.created_at, t.reference
+    FROM idempotency_record r
+    LEFT JOIN bank_transaction t ON t.idempotency_key = r.idempotency_key
+   WHERE r.status = 'IN_PROGRESS' AND r.claim_token IS NULL;
+  ```
+
+  A row with a reference posted; one without did not, and deleting it frees the key. Holds keep
+  no key on a posting, so a `hold:` or `hold-capture:` row needs checking against the account's
+  holds instead.
+
+`corebank.idempotency.claims.taken.over` counts takeovers. Any at all mean requests are dying
+mid-flight, which is worth finding out why.
 
 ### The ledger check
 
@@ -1567,6 +1605,7 @@ as REST, passed as `authorization` metadata.
 | `RESOURCE_NOT_FOUND` | 404 | No such customer, account or transaction |
 | `IDEMPOTENCY_KEY_REUSED` | 409 | Same key, different body |
 | `REQUEST_IN_PROGRESS` | 409 | An identical request is still being processed |
+| `IDEMPOTENCY_CLAIM_LOST` | 409 | The request took over a minute and a retry with the same key took it over; nothing was done. Retry with the same key for the outcome |
 | `CONCURRENT_MODIFICATION` | 409 | Optimistic lock lost; retry |
 | `EMAIL_TAKEN` | 409 | A customer with that email already exists |
 | `IDENTITY_ALREADY_LINKED` | 409 | That Keycloak identity is linked to a different customer |

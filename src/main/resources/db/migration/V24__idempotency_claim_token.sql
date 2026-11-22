@@ -1,0 +1,13 @@
+-- A claim's token: which request holds it now.
+--
+-- An IN_PROGRESS claim used to be permanent if the request that made it never finished: a crash or
+-- a database blip between claiming the key and completing or releasing it left every retry with
+-- that key answering 409 REQUEST_IN_PROGRESS for good. A claim made from now on carries a token,
+-- its completion commits in the same transaction as the operation, and the completion only
+-- succeeds while the token is still its own. So a claim left IN_PROGRESS has changed nothing, and
+-- one old enough can safely be handed to a retry under a new token: if the original was only slow,
+-- its completion finds the token gone and its whole operation rolls back.
+--
+-- Left null on every row already here. Those claims were made when completion was a separate
+-- transaction, so an IN_PROGRESS one may well have posted, and none is ever taken over.
+ALTER TABLE idempotency_record ADD COLUMN claim_token UUID;
