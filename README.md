@@ -985,6 +985,11 @@ retry after an insufficient-funds error still works.
 Reusing a key with a different body returns `409` rather than quietly doing something the
 caller did not ask for.
 
+**A key is honoured for 10 days.** A retry with a key whose request completed more than 10 days
+ago is treated as a new request and posts again (`COREBANK_RETENTION_IDEMPOTENCY_AFTER`; see
+[Retention](#retention)). Clients should not reuse keys, and should not retry a request older than
+that expecting a replay.
+
 **A request that never finishes does not lock its key for good.** The operation and the claim's
 completion used to be separate transactions: the posting committed, then a second transaction
 marked the claim done. A crash or a database blip between them, or before the claim could be
@@ -1053,6 +1058,26 @@ than the entities on purpose, so that it reads what is really in the tables.
 The first run on an existing database may find something, such as accounts closed before closure
 checked for unpaid interest. That is the check working, and it replaces the hand-run queries in
 [Closing an account](#closing-an-account).
+
+### Retention
+
+Two tables grew by a row per request and never shrank. A nightly job (03:15 UTC,
+`COREBANK_RETENTION_CRON`) now deletes what nothing will read again, in batches of 1,000 so the
+first run against years of rows never holds a long lock:
+
+| Table | Deleted | Never deleted |
+|---|---|---|
+| `outbox_event` | Published more than 7 days ago. Nothing reads a published row: the relay and the backlog monitor look only at unpublished ones, and the admin replay rebuilds events from the ledger | An unpublished event, however old: it has not reached Kafka yet |
+| `idempotency_record` | A request completed more than 10 days ago, which is the window a key is honoured for. An abandoned claim with a token, which by the rule claims complete by changed nothing | A stuck claim from before claim tokens: it may have posted, so it is a person's to check (see [Idempotency](#idempotency)) |
+
+`corebank.retention.deleted`, by `table`, counts what goes. A night it cannot run is counted under
+`corebank.background.failures{task="retention"}`, which fires the background-task alert; the
+next night deletes everything it would have.
+
+**One edge to know.** A standing order recovers from a crash between posting and recording the
+payment by replaying its stored key on the next tick, which is minutes later. If the application
+were down for more than 10 days at exactly that moment, the key would be gone and that occurrence
+would post again. Raising the window removes the edge at the cost of a larger table.
 
 ### Concurrency
 
@@ -1455,6 +1480,7 @@ Prometheus.
 | `hold-expiry` | `Could not expire hold` |
 | `standing-orders` | `Scheduled transfer ... could not be processed`. A standing order refused for want of funds is not a failure here: the customer is told, and it shows as `corebank.scheduled.transfers{outcome="failed"}` |
 | `ledger-check` | `Ledger check could not run`. Until it runs again, the ledger alert shows the last check's verdict |
+| `retention` | `Retention could not run`. Nothing is lost; the next night deletes what this one would have |
 | `search-indexing` | `Could not index ... and will not retry it`: a document OpenSearch rejected as bad, which is missing from search. Fix the cause, then replay from the Admin page |
 | `notifications` | `Could not write the notifications for`: a posting nobody was told about. A database outage is retried, not counted; this is anything else |
 | `malformed-events` | `Skipped a malformed message` or `Skipped N malformed`: a message on a topic that could not be read, skipped by each consumer of that topic. Find what wrote it |
@@ -1707,6 +1733,10 @@ portable SQL so the same files run on PostgreSQL and on H2 for tests. Hibernate 
 | `COREBANK_INTEREST_ENABLED` | `true` | Set `false` to keep the accrual runner out of a replica |
 | `COREBANK_LEDGER_CHECK_CRON` | `0 30 2 * * *` | When the nightly ledger check runs, in UTC |
 | `COREBANK_LEDGER_CHECK_ENABLED` | `true` | Set `false` to keep the nightly ledger check out of a replica |
+| `COREBANK_RETENTION_CRON` | `0 15 3 * * *` | When the nightly retention job runs, in UTC |
+| `COREBANK_RETENTION_ENABLED` | `true` | Set `false` to keep the retention job out of a replica |
+| `COREBANK_RETENTION_OUTBOX_AFTER` | `7d` | How long a published outbox event is kept |
+| `COREBANK_RETENTION_IDEMPOTENCY_AFTER` | `10d` | How long an `Idempotency-Key` is honoured: a retry with a key completed longer ago posts again |
 | `COREBANK_DAILY_DEBIT_LIMIT` | `200000.00` | Per account, per UTC calendar day, across withdrawals and outgoing transfers |
 | `COREBANK_SINGLE_TRANSACTION_LIMIT` | `100000.00` | One posting's ceiling |
 | `COREBANK_HOLD_SWEEP_ENABLED` | `true` | Set `false` to keep the hold-expiry sweep out of a replica. Housekeeping only — a capture past the expiry instant is refused whether or not the sweep has run |
