@@ -203,6 +203,15 @@ corebank:
     # can run the same check at any moment from the Admin page. In UTC.
     cron: ${COREBANK_LEDGER_CHECK_CRON:0 30 2 * * *}
     enabled: ${COREBANK_LEDGER_CHECK_ENABLED:true}
+  retention:
+    # Nightly, after the ledger check. See RetentionService for what goes and why. In UTC.
+    cron: ${COREBANK_RETENTION_CRON:0 15 3 * * *}
+    enabled: ${COREBANK_RETENTION_ENABLED:true}
+    # Published outbox events nothing reads again.
+    outbox-after: ${COREBANK_RETENTION_OUTBOX_AFTER:7d}
+    # How long an Idempotency-Key is honoured: a retry with a key completed longer ago posts again.
+    idempotency-after: ${COREBANK_RETENTION_IDEMPOTENCY_AFTER:10d}
+    batch-size: 1000
 
 logging:
   level:

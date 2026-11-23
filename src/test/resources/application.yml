@@ -97,6 +97,9 @@ corebank:
   ledger-check:
     # Off, like the other runners: tests here corrupt rows on purpose. LedgerCheckTest drives it.
     enabled: false
+  retention:
+    # Off: it would delete rows other tests are about to look at. RetentionTest drives it.
+    enabled: false
 
 spring.grpc:
   server:

@@ -255,6 +255,9 @@ class CoreBankTestcontainersIT {
     @Autowired
     private com.corebank.idempotency.IdempotencyService idempotencyService;
 
+    @Autowired
+    private com.corebank.retention.RetentionService retentionService;
+
     private String tellerToken;
     private String adminToken;
     private String customerToken;
@@ -1305,5 +1308,42 @@ class CoreBankTestcontainersIT {
         given().header("Authorization", "Bearer " + tellerToken)
                 .get("/accounts/{id}", accountId)
                 .then().statusCode(200).body("balance", equalTo(130.00f));
+    }
+
+    @Test
+    @Order(20)
+    @DisplayName("retention deletes old published events and expired keys on Postgres, and nothing still needed")
+    void retentionOnPostgres() {
+        // The batched DELETE ... WHERE id IN (SELECT ... LIMIT ?) is the part H2 cannot vouch for.
+        java.util.function.Function<Long, java.sql.Timestamp> daysAgo = days ->
+                java.sql.Timestamp.from(java.time.Instant.now().minus(java.time.Duration.ofDays(days)));
+        String outbox = """
+                insert into outbox_event (id, aggregate_type, topic, event_key, payload, created_at, published_at)
+                values (?, 'TRANSACTION', 'corebank.transactions.posted', 'tc-retention', '{}', ?, ?)
+                """;
+        UUID oldPublished = UUID.randomUUID();
+        UUID oldUnpublished = UUID.randomUUID();
+        jdbc.update(outbox, oldPublished, daysAgo.apply(9L), daysAgo.apply(8L));
+        jdbc.update(outbox, oldUnpublished, daysAgo.apply(30L), null);
+        String key = """
+                insert into idempotency_record (id, scope, idempotency_key, request_hash, status, created_at, completed_at, claim_token)
+                values (?, 'tc-retention', ?, 'hash', ?, ?, ?, ?)
+                """;
+        UUID expired = UUID.randomUUID();
+        UUID current = UUID.randomUUID();
+        jdbc.update(key, expired, "tc-expired-" + expired, "COMPLETED", daysAgo.apply(11L), daysAgo.apply(11L), UUID.randomUUID());
+        jdbc.update(key, current, "tc-current-" + current, "COMPLETED", daysAgo.apply(9L), daysAgo.apply(9L), UUID.randomUUID());
+
+        com.corebank.retention.RetentionService.Pruned pruned = retentionService.prune();
+
+        java.util.function.BiFunction<String, UUID, Long> count = (table, id) ->
+                jdbc.queryForObject("select count(*) from " + table + " where id = ?", Long.class, id);
+        assertThat(count.apply("outbox_event", oldPublished)).isZero();
+        assertThat(count.apply("outbox_event", oldUnpublished)).isEqualTo(1);
+        assertThat(count.apply("idempotency_record", expired)).isZero();
+        assertThat(count.apply("idempotency_record", current)).isEqualTo(1);
+        assertThat(pruned.outboxEvents()).isPositive();
+        assertThat(pruned.idempotencyRecords()).isPositive();
+        jdbc.update("delete from outbox_event where id = ?", oldUnpublished);
     }
 }
