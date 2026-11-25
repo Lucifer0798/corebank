@@ -1141,10 +1141,31 @@ before Keycloak does.
 
 ### Caching
 
-Redis sits in front of `GET /accounts/{id}` with a 30-second TTL. Every posting that touches an
-account evicts its cache entry immediately after commit, so the TTL is a safety net for a
-missed eviction, not the primary freshness mechanism — an eviction bug would show up as
-staleness for at most 30 seconds, not indefinitely.
+Redis sits in front of `GET /accounts/{id}` with a 30-second TTL. Every posting, hold and status
+change that touches an account evicts its cache entry when its transaction commits, so the TTL is
+a safety net for a missed eviction, not the primary freshness mechanism — an eviction bug would
+show up as staleness for at most 30 seconds, not indefinitely.
+
+**When it commits, not before.** This said "after commit" for a long time while the eviction in
+fact ran inside the transaction, before the commit. A read in that gap (a second tab, a gRPC
+poller) missed the cache, read the old, still-committed balance or status, and cached it, and
+nothing evicted it again once the change committed: the old balance showed for up to 30 seconds
+after a deposit. `AccountService.evictCache` now registers the eviction to run when the
+transaction commits, and every posting, hold and status change goes through it. Two details
+matter, and each was found by a test:
+
+- **`evictIfPresent`, not `evict`.** Spring Data Redis 4 sends a plain `evict` on an asynchronous
+  writer and returns at once, so an eviction made at commit could still be on its way while the
+  next read found the old entry: the race test failed 2 runs in 5. `evictIfPresent` deletes
+  before it returns.
+- **Not the cache manager's `transactionAware()`.** It defers evictions the same way, but runs
+  them outside `CacheConfig`'s error handler, so with Redis down every posting committed its money
+  and then threw to the caller: 188 tests in the Redis-less suite failed exactly that way. A
+  failed eviction is logged and nothing more, like every other cache failure here.
+
+`CoreBankTestcontainersIT` reproduces the race on real Redis, for a deposit and for a freeze. One
+case no cache-aside scheme closes: a read that fetched the old row just before the commit and only
+writes it to the cache after the commit's eviction. The 30-second TTL is what bounds that one.
 
 Redis is a read-through accelerator, never a source of truth: every cached value also lives in
 PostgreSQL. `CacheConfig` implements `CachingConfigurer` and installs an error handler that logs

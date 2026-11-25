@@ -321,7 +321,9 @@ public class TransactionService {
         transaction.setInitiatedByName(actor.name());
         BankTransaction saved = transactions.save(transaction);
         // The cached account detail (AccountService.get) is now stale for every account this
-        // posting touched; the short TTL is a safety net, not the primary freshness mechanism.
+        // posting touched. The eviction takes effect when this transaction commits, not now: see
+        // AccountService.evictCache for why evicting before the commit let a concurrent read cache
+        // the old balance.
         saved.getEntries().stream()
                 .map(entry -> entry.getAccount().getId())
                 .distinct()

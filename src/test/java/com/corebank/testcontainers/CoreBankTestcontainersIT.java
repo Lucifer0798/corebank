@@ -258,6 +258,12 @@ class CoreBankTestcontainersIT {
     @Autowired
     private com.corebank.retention.RetentionService retentionService;
 
+    @Autowired
+    private com.corebank.transaction.service.TransactionService transactionService;
+
+    @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     private String tellerToken;
     private String adminToken;
     private String customerToken;
@@ -1345,5 +1351,60 @@ class CoreBankTestcontainersIT {
         assertThat(pruned.outboxEvents()).isPositive();
         assertThat(pruned.idempotencyRecords()).isPositive();
         jdbc.update("delete from outbox_event where id = ?", oldUnpublished);
+    }
+
+    /**
+     * Runs {@code change} in a transaction, and while it is still open -- after it has evicted the
+     * account's cached detail, before it commits -- reads the account from another thread, the way a
+     * second browser tab or a gRPC poller would. That read sees the committed, old state.
+     */
+    private void changeWhileAnotherReaderCaches(UUID accountId, Runnable change) throws Exception {
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                com.corebank.common.security.Actors.runAs(
+                        com.corebank.common.security.Actor.system("cache-race-test"), change);
+                try {
+                    executor.submit(() -> accountService.get(accountId)).get(30, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (Exception ex) {
+                    throw new IllegalStateException(ex);
+                }
+            });
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    @Order(21)
+    @DisplayName("a balance read while a deposit commits is not cached past the commit, on real Redis")
+    void aDepositIsNotHiddenByAReadDuringItsTransaction() throws Exception {
+        // The cache used to be evicted inside the posting's transaction, before it committed. A read in
+        // between missed the cache, read the old balance, and cached it for the 30-second TTL, with
+        // nothing to evict it again once the deposit committed.
+        UUID accountId = UUID.fromString(fundedAccount(new BigDecimal("100.00")));
+        assertThat(accountService.get(accountId).balance()).isEqualByComparingTo("100.00");
+
+        changeWhileAnotherReaderCaches(accountId, () -> transactionService.deposit(accountId,
+                new com.corebank.transaction.dto.AmountRequest(new BigDecimal("5.00"), "INR", "Cache race"),
+                "tc-cache-race-" + UUID.randomUUID()));
+
+        assertThat(accountService.get(accountId).balance()).isEqualByComparingTo("105.00");
+        given().header("Authorization", "Bearer " + tellerToken)
+                .get("/accounts/{id}", accountId)
+                .then().statusCode(200).body("balance", equalTo(105.00f));
+    }
+
+    @Test
+    @Order(22)
+    @DisplayName("a status read while a freeze commits is not cached past the commit, on real Redis")
+    void aFreezeIsNotHiddenByAReadDuringItsTransaction() throws Exception {
+        UUID accountId = UUID.fromString(fundedAccount(new BigDecimal("100.00")));
+        assertThat(accountService.get(accountId).status()).isEqualTo(com.corebank.account.domain.AccountStatus.ACTIVE);
+
+        changeWhileAnotherReaderCaches(accountId, () -> accountService.changeStatus(
+                accountId, com.corebank.account.domain.AccountStatus.FROZEN, "Cache race test"));
+
+        assertThat(accountService.get(accountId).status()).isEqualTo(com.corebank.account.domain.AccountStatus.FROZEN);
     }
 }
