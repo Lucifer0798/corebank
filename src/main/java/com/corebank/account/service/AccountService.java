@@ -25,12 +25,17 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.cache.annotation.CacheEvict;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class AccountService {
@@ -38,21 +43,26 @@ public class AccountService {
     static final String ACCOUNT_NUMBER_SEQUENCE = "account_number_seq";
     private static final int MAX_OPEN_ACCOUNTS_PER_CUSTOMER = 10;
 
+    private static final Logger log = LoggerFactory.getLogger(AccountService.class);
+
     private final AccountRepository accounts;
     private final CustomerService customerService;
     private final SequenceNumberGenerator sequences;
     private final CoreBankProperties properties;
     private final List<AccountClosureCheck> closureChecks;
     private final AccountStatusChangeRepository statusChanges;
+    private final CacheManager cacheManager;
 
     public AccountService(AccountRepository accounts,
                           CustomerService customerService,
                           SequenceNumberGenerator sequences,
                           CoreBankProperties properties,
                           List<AccountClosureCheck> closureChecks,
-                          AccountStatusChangeRepository statusChanges) {
+                          AccountStatusChangeRepository statusChanges,
+                          CacheManager cacheManager) {
         this.accounts = accounts;
         this.statusChanges = statusChanges;
+        this.cacheManager = cacheManager;
         this.customerService = customerService;
         this.sequences = sequences;
         this.properties = properties;
@@ -112,9 +122,10 @@ public class AccountService {
 
     /**
      * Account detail is read far more often than it changes, so it is cached for a short TTL.
-     * Every path that changes a balance or a status calls {@link #evictCache(UUID)} straight
-     * after, so the TTL only ever covers a gap the eviction missed -- it is a safety net, not
-     * the primary freshness mechanism.
+     * Every path that changes a balance or a status calls {@link #evictCache(UUID)} in the
+     * transaction that changes it, and the cache manager holds that eviction until the transaction
+     * commits (see {@code CacheConfig}), so the TTL only ever covers a gap the eviction missed -- it
+     * is a safety net, not the primary freshness mechanism.
      *
      * <p>Deliberately not {@code sync = true}: that would stop concurrent misses on a hot account
      * from all reaching Postgres at once, but {@code CacheAspectSupport}'s synchronous path calls
@@ -138,7 +149,6 @@ public class AccountService {
         return accounts.findByCustomerId(customerId, pageable).map(AccountResponse::from);
     }
 
-    @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
     @Transactional
     /**
      * Freezes, unfreezes or closes an account, and records who did it and why in the same transaction.
@@ -183,6 +193,7 @@ public class AccountService {
                 Actors.current(), statedReason, now));
         account.setStatus(target);
         account.setClosedAt(target == AccountStatus.CLOSED ? now : null);
+        evictCache(account.getId());
         return AccountResponse.from(account);
     }
 
@@ -203,10 +214,50 @@ public class AccountService {
         }
     }
 
-    /** Evicts the cached detail for one account. Called after any posting that touches its balance. */
-    @CacheEvict(cacheNames = CacheConfig.ACCOUNTS_CACHE, key = "#accountId")
+    /**
+     * Evicts the cached detail for one account, once the transaction that changed it has committed.
+     * Called by every posting, hold and status change that touches an account.
+     *
+     * <p>When it commits, not before. This used to be {@code @CacheEvict}, which ran at once, inside
+     * the transaction: a read between the eviction and the commit missed the cache, read the old,
+     * still-committed balance or status, and cached it for the whole TTL, with nothing to evict it
+     * again once the change committed. {@code CoreBankTestcontainersIT} reproduces it on real Redis.
+     *
+     * <p>{@code evictIfPresent}, not {@code evict}: Spring Data Redis 4 sends a plain {@code evict}
+     * on its asynchronous writer and returns at once, so even an eviction made at commit could still
+     * be on its way while the next read found the old entry. {@code evictIfPresent} deletes before it
+     * returns.
+     *
+     * <p>Not the cache manager's {@code transactionAware()}, which defers the same way but runs the
+     * deferred eviction outside {@code CacheConfig}'s error handler: with Redis down, every posting
+     * then committed its money and threw to the caller anyway. A Redis failure here is logged and
+     * nothing more, as everywhere else the cache is used.
+     *
+     * <p>What no cache-aside scheme closes, and the TTL still bounds: a read that fetched the old row
+     * just before the commit and only writes it to the cache after this eviction.
+     */
     public void evictCache(UUID accountId) {
-        // Body intentionally empty; @CacheEvict does the work.
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    evictNow(accountId);
+                }
+            });
+        } else {
+            evictNow(accountId);
+        }
+    }
+
+    private void evictNow(UUID accountId) {
+        try {
+            Cache cache = cacheManager.getCache(CacheConfig.ACCOUNTS_CACHE);
+            if (cache != null) {
+                cache.evictIfPresent(accountId);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("Cache evict failed for '{}' [{}]: {}", CacheConfig.ACCOUNTS_CACHE, accountId, ex.toString());
+        }
     }
 
     /** Every freeze, unfreeze and closure of this account, newest first. */

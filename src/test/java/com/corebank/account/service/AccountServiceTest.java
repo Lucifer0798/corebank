@@ -61,7 +61,8 @@ class AccountServiceTest {
     @BeforeEach
     void setUp() {
         accountService = new AccountService(accounts, customerService, sequences, TestProperties.defaults(), java.util.List.of(),
-                org.mockito.Mockito.mock(com.corebank.account.repository.AccountStatusChangeRepository.class));
+                org.mockito.Mockito.mock(com.corebank.account.repository.AccountStatusChangeRepository.class),
+                new org.springframework.cache.concurrent.ConcurrentMapCacheManager());
         // A plain Mockito test, so TestActorListener does not run; status changes need an actor.
         com.corebank.common.security.Actors.setTestFallback(com.corebank.config.TestActorListener.STAFF);
 
