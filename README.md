@@ -231,10 +231,25 @@ pod can't become ready until it registers), and the readiness probe's Kubernetes
 kubectl port-forward svc/app -n corebank 8080:8080
 kubectl port-forward svc/app -n corebank 9091:9091
 kubectl port-forward svc/keycloak -n corebank 8081:8080
+kubectl port-forward svc/prometheus -n corebank 9090:9090
 ```
 
 Reach it exactly like the Docker Compose stack — same ports, same demo logins — once these are
 running.
+
+**The cluster has Prometheus, with the same alerts.** It used to have none: everything the app and
+insights export went unread here, and none of the [alerts](#alerts) existed outside compose.
+[k8s/prometheus.yaml](k8s/prometheus.yaml) runs the compose stack's own config, not a copy:
+`deploy.sh` and Terraform load `observability/prometheus.yml` and `observability/alerts.yml` into
+the `prometheus-config` ConfigMap, the way the Keycloak realm is loaded, because kustomize refuses
+files outside `k8s/`. The scrape targets work unchanged, since the Services are named `app` and
+`insights` here too. A config change restarts Prometheus, which reads it only at start.
+`KubernetesPrometheusTest` checks every scrape target is a Service on that port, the image matches
+compose, and both deploy paths load the real files.
+
+Two limits: its data is an `emptyDir`, so history goes with the pod (fine for kind; a real cluster
+wants a volume), and there is no Grafana or Tempo here, so traces exported by the app still go
+nowhere in the cluster.
 
 ---
 

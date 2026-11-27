@@ -12,9 +12,14 @@ resources:
   - opensearch.yaml
   - insights.yaml
   - app.yaml
+  - prometheus.yaml
 
 # keycloak-realm-import isn't generated here: kustomize refuses file references outside its own
 # directory (a security restriction, not something worth working around), and copying
 # keycloak/corebank-realm.json into k8s/ would create a second copy that silently drifts from the
 # one compose.yaml already mounts. deploy.sh creates that one ConfigMap imperatively, from the
 # original file, before applying this kustomization.
+#
+# prometheus-config is created the same way and for the same reason: from observability/prometheus.yml
+# and observability/alerts.yml, the files compose mounts and CI's promtool tests, so the cluster's
+# alert rules cannot drift from the ones that were tested.
