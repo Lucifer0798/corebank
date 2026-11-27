@@ -100,8 +100,27 @@ resource "terraform_data" "realm_configmap" {
 #
 # The honest trade-off: Terraform tracks *that* the manifests are applied, not the state of each
 # object inside them. `kubectl diff -k k8s/` remains the tool for the latter.
-resource "terraform_data" "manifests" {
+# Prometheus's config and alert rules, from the files compose mounts and CI's promtool tests. An
+# imperative create for the same reason as the realm import above: kustomize refuses files outside
+# k8s/, and a copy there would drift from the rules that were tested.
+resource "terraform_data" "prometheus_config" {
   depends_on = [terraform_data.realm_configmap]
+
+  triggers_replace = [
+    kind_cluster.corebank.id,
+    filesha256("${path.root}/../observability/prometheus.yml"),
+    filesha256("${path.root}/../observability/alerts.yml"),
+  ]
+
+  provisioner "local-exec" {
+    command     = "kubectl create configmap prometheus-config -n corebank --from-file=prometheus.yml=observability/prometheus.yml --from-file=alerts.yml=observability/alerts.yml --dry-run=client -o yaml | kubectl apply -f -"
+    interpreter = var.shell_interpreter
+    working_dir = "${path.root}/.."
+  }
+}
+
+resource "terraform_data" "manifests" {
+  depends_on = [terraform_data.realm_configmap, terraform_data.prometheus_config]
 
   triggers_replace = [
     kind_cluster.corebank.id,
@@ -113,6 +132,24 @@ resource "terraform_data" "manifests" {
     command     = "kubectl apply -k k8s/"
     interpreter = var.shell_interpreter
     working_dir = "${path.root}/.."
+  }
+}
+
+# Prometheus reads its config at start, and a changed ConfigMap does not restart it: restart it
+# whenever its files change, once the Deployment exists. After the app's rollout, and with the same
+# timeout: on a fresh cluster the image is still being pulled, which took 3-4 minutes on kind and
+# timed out a 2-minute wait.
+resource "terraform_data" "prometheus_reload" {
+  depends_on = [terraform_data.app_rollout]
+
+  triggers_replace = [
+    terraform_data.prometheus_config.id,
+  ]
+
+  provisioner "local-exec" {
+    command     = "kubectl rollout restart deployment/prometheus -n corebank && kubectl rollout status deployment/prometheus -n corebank --timeout=${var.rollout_timeout}"
+    interpreter = var.shell_interpreter
+    working_dir = path.root
   }
 }
 
